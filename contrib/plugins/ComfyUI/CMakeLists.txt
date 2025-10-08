@@ -24,7 +24,7 @@ target_include_directories(ComfyUICommon PUBLIC
 )
 
 target_link_libraries(ComfyUICommon PUBLIC
-    OFX::Support
+    OfxSupport
     nlohmann_json::nlohmann_json
     httplib::httplib
     websocketpp::websocketpp

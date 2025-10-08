@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git rebase:*)",
+      "Bash(conan list:*)",
+      "Bash(cmake:*)",
+      "Bash(nm:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
