@@ -34,6 +34,9 @@ target_link_libraries(ComfyUICommon PUBLIC
     OpenSSL::Crypto
 )
 
+# Test suite
+add_subdirectory(tests)
+
 # Future: Add individual plugin subdirectories here
 # add_subdirectory(segmentation)
 # add_subdirectory(upscale)
