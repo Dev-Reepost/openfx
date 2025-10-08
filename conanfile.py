@@ -26,12 +26,16 @@ class openfx(ConanFile):
 	)
 
 	settings = "os", "arch", "compiler", "build_type"
-	options = {"use_opencl": [True, False]}
+	options = {
+		"use_opencl": [True, False],
+		"build_comfyui_plugins": [True, False]
+	}
 	default_options = {
 		"expat/*:shared": True,
                 "use_opencl": False,
                 "spdlog/*:header_only": True,
-                "fmt/*:header_only": True
+                "fmt/*:header_only": True,
+                "build_comfyui_plugins": False
 	}
 	
 	def requirements(self):
@@ -39,9 +43,19 @@ class openfx(ConanFile):
 			self.requires("opencl-icd-loader/2023.12.14")
 			self.requires("opencl-headers/2023.12.14")
 		self.requires("opengl/system") # for OpenGL examples
-		self.requires("expat/2.7.1") # for HostSupport
+		self.requires("expat/2.7.1") # for HostSupport (updated from upstream)
 		self.requires("cimg/3.3.2") # to draw text into images
 		self.requires("spdlog/1.13.0") # for logging
+
+		# ComfyUI plugin dependencies
+		if self.options.build_comfyui_plugins:
+			self.requires("nlohmann_json/3.11.3")
+			self.requires("cpp-httplib/0.15.3")
+			self.requires("websocketpp/0.8.2")
+			# TODO: Add EXR I/O library (OpenEXR directly or simpler alternative)
+			# self.requires("openimageio/2.5.10.1")  # Complex dependency chain
+			self.requires("openssl/3.2.1") # Required for HTTPS support
+			self.requires("boost/1.84.0", override=True) # Resolve version conflict
 
 	def layout(self):
 		cmake_layout(self)

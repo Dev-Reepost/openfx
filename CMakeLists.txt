@@ -23,6 +23,7 @@ endif()
 option(OFX_SUPPORTS_OPENGLRENDER
        "Build with support for GPU rendering (OpenGL/CUDA/Metal/OpenCL)" ON)
 option(BUILD_EXAMPLE_PLUGINS "Build example plugins" OFF)
+option(BUILD_COMFYUI_PLUGINS "Build ComfyUI integration plugins" OFF)
 option(OFX_SUPPORTS_OPENCLRENDER
        "Build examples with support for OpenCL GPU rendering" OFF)
 option(OFX_SUPPORTS_CUDARENDER
@@ -65,6 +66,16 @@ find_package(EXPAT)
 find_package(opengl_system REQUIRED)
 find_package(cimg REQUIRED)
 find_package(spdlog REQUIRED)
+
+# ComfyUI plugin dependencies (optional)
+if(BUILD_COMFYUI_PLUGINS)
+  find_package(nlohmann_json REQUIRED)
+  find_package(httplib REQUIRED)
+  find_package(websocketpp REQUIRED)
+  # TODO: Add EXR I/O library
+  # find_package(OpenImageIO REQUIRED)
+  find_package(OpenSSL REQUIRED)
+endif()
 
 # Macros
 include(OpenFX)
