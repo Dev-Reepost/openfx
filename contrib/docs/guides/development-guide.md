@@ -67,6 +67,7 @@ Create plugin directory and source files manually, following the patterns in [Ex
 ### Plugin Architecture
 
 OpenFX plugins consist of:
+
 1. **Plugin Class**: Main effect implementation (inherits from `OFX::ImageEffect`)
 2. **Processor Classes**: Handle pixel-level processing with templates
 3. **Factory Class**: Describes plugin capabilities and creates instances
@@ -105,6 +106,7 @@ YourPlugin/
 ```
 
 Build script options:
+
 - `-d, --debug`: Debug build mode
 - `-c, --clean`: Clean build before building  
 - `-i, --install`: Install to system directory (requires sudo)
@@ -115,18 +117,21 @@ Build script options:
 ### Installation Paths
 
 **macOS:**
+
 - User: `~/Library/OFX/Plugins/` (recommended for development)
 - System: `/Library/OFX/Plugins/` (requires admin privileges)
 
 **Linux:**  
+
 - System: `/usr/OFX/Plugins/`
 
 **Windows:**
+
 - System: `%COMMONPROGRAMFILES%/OFX/Plugins`
 
 ### Bundle Structure
 
-```
+```bash
 MyPlugin.ofx.bundle/
 └── Contents/
     └── MacOS/
@@ -181,6 +186,7 @@ file ~/Library/OFX/Plugins/MyPlugin.ofx.bundle/Contents/MacOS/MyPlugin.ofx
 ## Testing
 
 Test your plugins in OpenFX host applications:
+
 - Autodesk Flame  
 - Foundry Nuke
 - Blackmagic DaVinci Resolve
@@ -189,12 +195,14 @@ Test your plugins in OpenFX host applications:
 ## Contributing
 
 When contributing plugin development improvements:
+
 1. Follow the existing code style and patterns
 2. Update documentation as needed
 3. Test across different host applications  
 4. Submit pull requests following [CONTRIBUTING.md](CONTRIBUTING.md)
 
 For more information about OpenFX:
+
 - [OpenFX Documentation](https://openfx.readthedocs.io/en/latest)
 - [Programming Guide By Example](https://openfx.readthedocs.io/en/latest/Guide)
 - [OpenFX Reference](https://openfx.readthedocs.io/en/latest/Reference)

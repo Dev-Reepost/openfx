@@ -7,7 +7,10 @@
 #include "ofxsImageEffect.h"
 #include "comfyui_client.h"
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <memory>
+#include <mutex>
 
 using json = nlohmann::json;
 
@@ -35,23 +38,28 @@ protected:
     OFX::Clip *_dstClip;
 
     // Common parameters
+    OFX::BooleanParam *_enableProcessing;      // Master enable/disable for ComfyUI processing
     OFX::StringParam *_serverAddress;
     OFX::IntParam *_serverPort;
-    OFX::StringParam *_sharedMountPath;
-    OFX::StringParam *_projectName;
+    OFX::StringParam *_sharedMountPath;        // Client-side mount (Mac/Linux path)
+    OFX::StringParam *_serverMountPoint;       // Server-side mount (Windows drive letter, e.g., "Z:")
+    OFX::StringParam *_projectName;            // Project name for file organization (e.g., "my_commercial")
+    OFX::StringParam *_workflowName;           // Workflow subdirectory (e.g., "segmentation")
+    OFX::StringParam *_outputVersion;          // Output version (e.g., "v001")
+    OFX::BooleanParam *_enableCache;
+    OFX::IntParam *_timeout;
 
-    // ComfyUI client
+    // Instance identification
+    std::string _instanceName;                 // OFX instance name for auto-basename generation
+
+    // ComfyUI client and thread safety
     std::unique_ptr<Client> _comfyClient;
+    mutable std::mutex _renderMutex;       // Protect client access in concurrent renders
 
-    // Processing state
-    enum State {
-        Idle,
-        Queuing,
-        Processing,
-        Completed,
-        Error
-    };
-    State _state;
+    // Logging
+    std::shared_ptr<spdlog::logger> _logger;
+
+    void initializeLogger();
 
 public:
     BasePlugin(OfxImageEffectHandle handle);
@@ -65,13 +73,26 @@ public:
                                       OfxRectD &rod) override;
 
     // Template method pattern - derived classes implement these
-    virtual json buildWorkflow() = 0;
+    virtual json buildWorkflow(int frame, const std::string& inputPath) = 0;
     virtual std::vector<std::string> getRequiredModels() = 0;
 
 protected:
     // Helper methods
     void executeWorkflow(const OFX::RenderArguments &args);
     std::string writeInputImage(OFX::Image* img, int frame);
+    void copyPixelData(const OFX::Image* src, OFX::Image* dst);
+    std::string parseOutputPath(const json& history, int frame);
+    std::string convertPathForComfyUI(const std::string& localPath);
+    std::string constructExpectedOutputPath(int frame);
+    std::string getEffectiveBasename();  // Get basename (auto-generated or manual)
+
+public:
+    // Static methods for parameter definition (called by derived plugin factories)
+    static void describeCommonParameters(OFX::ImageEffectDescriptor &desc,
+                                         OFX::ContextEnum context,
+                                         OFX::PageParamDescriptor *projectPage,
+                                         OFX::PageParamDescriptor *processingPage,
+                                         OFX::PageParamDescriptor *serverPage);
 };
 
 } // namespace ComfyUI

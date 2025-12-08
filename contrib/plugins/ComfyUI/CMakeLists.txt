@@ -16,7 +16,15 @@ message(STATUS "Building ComfyUI OFX plugins")
 add_library(ComfyUICommon STATIC
     common/comfyui_client.cpp
     common/comfyui_base_plugin.cpp
+    common/comfyui_image_io.cpp
 )
+
+# Set position-independent code for static library (required for linking into shared libraries)
+set_target_properties(ComfyUICommon PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Architecture will be set by CMAKE_OSX_ARCHITECTURES at configure time
+# For universal builds, use build-macos-universal-plugin.sh which builds
+# each architecture separately and combines with lipo
 
 target_include_directories(ComfyUICommon PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/common
@@ -28,17 +36,20 @@ target_link_libraries(ComfyUICommon PUBLIC
     nlohmann_json::nlohmann_json
     httplib::httplib
     websocketpp::websocketpp
-    # TODO: Add EXR I/O library
-    # OpenImageIO::OpenImageIO
+    tinyexr::tinyexr
+    miniz::miniz
     OpenSSL::SSL
     OpenSSL::Crypto
+    spdlog::spdlog_header_only
 )
 
 # Test suite
 add_subdirectory(tests)
 
-# Future: Add individual plugin subdirectories here
-# add_subdirectory(segmentation)
+# Concrete plugin implementations
+add_subdirectory(segmentation)
+
+# Future plugins:
 # add_subdirectory(upscale)
 # add_subdirectory(inpaint)
 

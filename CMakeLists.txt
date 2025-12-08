@@ -1,4 +1,13 @@
 cmake_minimum_required(VERSION 3.16.0)
+
+# macOS deployment target strategy:
+# - Universal binaries (build-macos-universal-plugin.sh): Targets macOS 14.4 (Sonoma) for Intel compatibility
+# - arm64-only builds (build-plugin.sh): Uses latest SDK (no deployment target)
+# The deployment target is set by the build script, not here
+if(APPLE AND DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+  message(STATUS "macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 if(OFX_SUPPORTS_CUDARENDER AND NOT APPLE)
   project(
     openfx
@@ -17,7 +26,10 @@ set(CMAKE_STATIC_LIBRARY_PREFIX "lib")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_definitions(-D_HAS_AUTO_PTR_ETC)
 if(APPLE)
-  set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
+  # Default to native architecture for simple builds
+  # For universal binary (x86_64 + arm64), use build-macos-universal-plugin.sh
+  # which builds each architecture separately and combines with lipo
+  # CMAKE_OSX_ARCHITECTURES can be overridden on command line if needed
 endif()
 
 option(OFX_SUPPORTS_OPENGLRENDER
@@ -72,8 +84,8 @@ if(BUILD_COMFYUI_PLUGINS)
   find_package(nlohmann_json REQUIRED)
   find_package(httplib REQUIRED)
   find_package(websocketpp REQUIRED)
-  # TODO: Add EXR I/O library
-  # find_package(OpenImageIO REQUIRED)
+  find_package(tinyexr REQUIRED)
+  find_package(miniz REQUIRED)
   find_package(OpenSSL REQUIRED)
 endif()
 

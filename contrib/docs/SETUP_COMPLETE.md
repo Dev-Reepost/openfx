@@ -8,6 +8,7 @@
 ### 1. Dependency Management ✓
 
 **Updated:** `conanfile.py`
+
 - Added `build_comfyui_plugins` option (default: OFF)
 - Configured 5 C++ dependencies:
   - `nlohmann_json` - JSON parsing
@@ -17,6 +18,7 @@
   - `openssl` - HTTPS encryption
 
 **How it works:**
+
 - All dependencies are **automatically downloaded** by Conan
 - Stored in `~/.conan2/p/` (shared cache)
 - CMake find_package configs auto-generated in `build/Release/generators/`
@@ -24,6 +26,7 @@
 ### 2. Build System Integration ✓
 
 **Updated:** `CMakeLists.txt`
+
 - Added `BUILD_COMFYUI_PLUGINS` CMake option
 - Configured automatic package discovery
 - Linked dependencies when option is enabled
@@ -46,6 +49,7 @@ ComfyUI/
 ### 4. Documentation ✓
 
 **Created:**
+
 - `contrib/plugins/ComfyUI/README.md` - Plugin overview and usage
 - `contrib/docs/comfyui-build-guide.md` - Complete build instructions
 - `contrib/docs/pybox-to-ofx-transposition.md` - Architecture guide (already existed)
@@ -58,12 +62,14 @@ ComfyUI/
 
 **Q: Will you take care of getting the C++ libraries?**
 **A:** ✓ Yes! Conan handles everything automatically. You just need to:
+
 1. Run `conan install` with the right options
 2. Conan downloads, builds, and configures all dependencies
 3. No manual downloads or environment variables needed!
 
 **Q: Where do you recommend putting them?**
 **A:** ✓ Already configured! Dependencies go to:
+
 - `~/.conan2/p/` - Global Conan cache (shared across projects)
 - `build/Release/generators/` - CMake integration files (auto-generated)
 
@@ -150,6 +156,7 @@ conan install -s build_type=Release \
 ```
 
 Expected output:
+
 ```
 nlohmann_json/3.11.3
 cpp-httplib/0.15.3
@@ -241,6 +248,7 @@ Should compile successfully and create `libComfyUICommon.a`
 ## Questions?
 
 Refer to:
+
 - Build issues → `contrib/docs/comfyui-build-guide.md` (Troubleshooting section)
 - Architecture questions → `contrib/docs/pybox-to-ofx-transposition.md`
 - Plugin structure → `contrib/plugins/ComfyUI/README.md`

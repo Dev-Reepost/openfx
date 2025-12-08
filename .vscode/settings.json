@@ -1,3 +1,9 @@
 {
-    "claudeCodeChat.permissions.yoloMode": false
+    "claudeCodeChat.permissions.yoloMode": false,
+    "files.associations": {
+        "*.xconf": "xml",
+        "*.tmpl": "dotenv",
+        "*.batch": "xml",
+        "iostream": "cpp"
+    }
 }

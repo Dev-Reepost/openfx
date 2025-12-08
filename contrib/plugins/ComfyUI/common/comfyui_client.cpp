@@ -3,11 +3,19 @@
 
 #include "comfyui_client.h"
 #include <httplib.h>
+#include <websocketpp/config/asio_client.hpp>
+#include <websocketpp/client.hpp>
 #include <random>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
 #include <iostream>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
+
+// WebSocket client type
+typedef websocketpp::client<websocketpp::config::asio_client> ws_client;
 
 namespace ComfyUI {
 
@@ -139,15 +147,12 @@ json Client::getHistory(const std::string& promptId) {
                                    std::to_string(res->status));
         }
 
-        // Parse and return history
+        // Parse and return FULL history response
+        // Response format: {prompt_id: {outputs: {...}, status: {...}, prompt: {...}}}
         json history = json::parse(res->body);
 
-        // History response format: {prompt_id: {outputs: {...}, status: {...}}}
-        if (history.contains(promptId)) {
-            return history[promptId];
-        }
-
-        return json::object();
+        // Return the full history object so caller can check if promptId exists
+        return history;
 
     } catch (const json::exception& e) {
         throw std::runtime_error(std::string("JSON parse error: ") + e.what());
@@ -213,6 +218,138 @@ std::string Client::generateClientId() {
         ss << std::hex << dis(gen);
     }
     return ss.str();
+}
+
+void Client::monitorExecution(const std::string& promptId, EventCallback callback) {
+    try {
+        // Create WebSocket client
+        ws_client client;
+
+        // Set up logging (minimal)
+        client.set_access_channels(websocketpp::log::alevel::none);
+        client.set_error_channels(websocketpp::log::elevel::none);
+
+        // Initialize ASIO
+        client.init_asio();
+
+        // Track completion state
+        bool completed = false;
+        bool error_occurred = false;
+        std::string error_message;
+        std::mutex mtx;
+        std::condition_variable cv;
+
+        // Message handler
+        client.set_message_handler([&](websocketpp::connection_hdl hdl, ws_client::message_ptr msg) {
+            try {
+                json message = json::parse(msg->get_payload());
+                std::string type = message["type"];
+
+                if (type == "status") {
+                    // Queue status update
+                    if (callback) {
+                        callback(EventType::Status, message["data"]);
+                    }
+                }
+                else if (type == "executing") {
+                    // Node execution update
+                    json data = message["data"];
+                    std::string node = data.contains("node") && !data["node"].is_null()
+                        ? data["node"].get<std::string>()
+                        : "";
+
+                    if (node.empty() && data["prompt_id"] == promptId) {
+                        // Execution completed (node is null)
+                        if (callback) {
+                            callback(EventType::Completed, data);
+                        }
+                        std::lock_guard<std::mutex> lock(mtx);
+                        completed = true;
+                        cv.notify_all();
+                    } else if (!node.empty()) {
+                        // Node executing
+                        if (callback) {
+                            callback(EventType::Executing, data);
+                        }
+                    }
+                }
+                else if (type == "progress") {
+                    // Progress update
+                    if (callback) {
+                        callback(EventType::Progress, message["data"]);
+                    }
+                }
+                else if (type == "execution_error") {
+                    // Execution error
+                    if (callback) {
+                        callback(EventType::ExecutionError, message["data"]);
+                    }
+                    std::lock_guard<std::mutex> lock(mtx);
+                    error_occurred = true;
+                    error_message = message["data"].dump();
+                    cv.notify_all();
+                }
+                else if (type == "execution_cached") {
+                    // Result from cache
+                    if (callback) {
+                        callback(EventType::ExecutionCached, message["data"]);
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "WebSocket message parsing error: " << e.what() << std::endl;
+            }
+        });
+
+        // Open handler
+        client.set_open_handler([&](websocketpp::connection_hdl hdl) {
+            // Connection established
+        });
+
+        // Fail handler
+        client.set_fail_handler([&](websocketpp::connection_hdl hdl) {
+            std::lock_guard<std::mutex> lock(mtx);
+            error_occurred = true;
+            error_message = "WebSocket connection failed";
+            cv.notify_all();
+        });
+
+        // Build WebSocket URL: ws://hostname:port/ws?clientId=xxx
+        std::stringstream url;
+        url << "ws://" << m_impl->hostname << ":" << m_impl->port
+            << "/ws?clientId=" << m_impl->clientId;
+
+        // Connect
+        websocketpp::lib::error_code ec;
+        ws_client::connection_ptr con = client.get_connection(url.str(), ec);
+        if (ec) {
+            throw std::runtime_error("WebSocket connection failed: " + ec.message());
+        }
+
+        client.connect(con);
+
+        // Run in separate thread
+        std::thread ws_thread([&client]() {
+            client.run();
+        });
+
+        // Wait for completion or error
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [&]{ return completed || error_occurred; });
+
+        // Close connection
+        client.stop();
+        if (ws_thread.joinable()) {
+            ws_thread.join();
+        }
+
+        // Check for errors
+        if (error_occurred) {
+            throw std::runtime_error("ComfyUI execution error: " + error_message);
+        }
+
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("WebSocket monitoring error: ") + e.what());
+    }
 }
 
 } // namespace ComfyUI

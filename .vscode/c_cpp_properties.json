@@ -3,13 +3,34 @@
         {
             "name": "Mac",
             "includePath": [
-                "${workspaceFolder}/Support/include",
-                "${workspaceFolder}/**"
+                // Project sources
+                "${workspaceFolder}/**",
+                // Conan-managed dependencies (ComfyUI plugins)
+                "/Users/julien/.conan2/p/nlohm0567ffc90cfc1/p/include",
+                "/Users/julien/.conan2/p/cpp-h42bdad9386456/p/include",
+                "/Users/julien/.conan2/p/websof2226ef4bf37c/p/include",
+                "/Users/julien/.conan2/p/tinye8116d646f5878/p/include",
+                "/Users/julien/.conan2/p/b/minizc5a9957b533cc/p/include",
+                "/Users/julien/.conan2/p/b/minizc5a9957b533cc/p/include/miniz",
+                "/Users/julien/.conan2/p/b/opens73a6b4e50dba3/p/include",
+                "/Users/julien/.conan2/p/b/boostfae17de75167f/p/include",
+                "/Users/julien/.conan2/p/fmtfe38de257773a/p/include",
+                "/Users/julien/.conan2/p/spdlo3f7810801d996/p/include",
+                "/Users/julien/.conan2/p/spdlo3f7810801d996/p/include/spdlog",
+                
+                // Third-party libraries installed via Homebrew (e.g., boost, curl, libpng)
+                "/opt/homebrew/include",
+                // C++ standard library (<memory>, <string>, <vector>, etc.)
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1",
+                // C standard library and POSIX APIs (<stdio.h>, <unistd.h>, <pthread.h>, etc.)
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include"
             ],
-            "defines": [],
+            "macFrameworkPath": [
+                "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+            ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "c17",
-            "cppStandard": "c++14",
+            "cppStandard": "c++17",
             "intelliSenseMode": "macos-clang-arm64"
         }
     ],

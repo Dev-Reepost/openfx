@@ -53,3 +53,8 @@ Documentation/build
 Documentation/doxygen_build
 
 xizvuaie.fcz.txt
+.aider*
+
+# Documentation working files
+contrib/docs/timesheets/
+contrib/docs/progress/

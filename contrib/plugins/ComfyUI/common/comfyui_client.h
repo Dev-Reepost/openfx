@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -14,11 +15,31 @@ using json = nlohmann::json;
 namespace ComfyUI {
 
 /**
- * @brief REST client for ComfyUI server communication
+ * @brief Event types for WebSocket monitoring callbacks
+ */
+enum class EventType {
+    Status,           // Queue status update
+    Executing,        // Node execution update
+    Progress,         // Progress update from a node
+    ExecutionError,   // Execution error occurred
+    ExecutionCached,  // Result retrieved from cache
+    Completed         // Workflow completed successfully
+};
+
+/**
+ * @brief Callback function for WebSocket events
+ *
+ * @param eventType Type of event received
+ * @param data Event data (JSON format varies by event type)
+ */
+using EventCallback = std::function<void(EventType eventType, const json& data)>;
+
+/**
+ * @brief REST/WebSocket client for ComfyUI server communication
  *
  * Handles HTTP/WebSocket communication with ComfyUI server for:
  * - Submitting workflows
- * - Monitoring execution status
+ * - Monitoring execution status via WebSocket
  * - Retrieving generated images
  * - Managing models
  */
@@ -36,6 +57,18 @@ public:
     std::string queuePrompt(const json& workflow, const std::string& clientId);
     json getHistory(const std::string& promptId);
     bool interruptExecution(const std::string& clientId);
+
+    /**
+     * @brief Monitor workflow execution via WebSocket
+     *
+     * Connects to ComfyUI WebSocket endpoint and monitors workflow execution.
+     * Blocks until workflow completes, errors, or is interrupted.
+     *
+     * @param promptId Prompt ID from queuePrompt()
+     * @param callback Called for each event (progress, status, errors)
+     * @throws std::runtime_error if connection fails or execution errors
+     */
+    void monitorExecution(const std::string& promptId, EventCallback callback);
 
     // File I/O paths
     void setInputDirectory(const std::string& path);

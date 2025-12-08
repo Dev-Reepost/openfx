@@ -49,7 +49,7 @@ void RunMetalKernel(void* p_CmdQ, int p_Width, int p_Height, float* p_Gain, cons
 
         MTLCompileOptions* options = [MTLCompileOptions new];
         if (@available(macOS 15.0, iOS 18.0, *)) {
-            options.mathMode = MTLLibraryMathModeFast;
+            options.mathMode = MTLMathModeFast;
         } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"

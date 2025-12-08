@@ -1,6 +1,3 @@
-// Copyright OpenFX and contributors to the OpenFX project.
-// SPDX-License-Identifier: BSD-3-Clause
-
 # ComfyUI OFX Plugins - Build Guide
 
 ## Quick Start
@@ -54,7 +51,7 @@ cmake --preset conan-release \
 
 Conan manages all C++ libraries automatically:
 
-```
+```bash
 ~/.conan2/p/                         # Package cache (shared across projects)
   ├── nlohm*/                        # nlohmann/json
   ├── httpli*/                       # cpp-httplib
@@ -68,6 +65,7 @@ Conan manages all C++ libraries automatically:
 ```
 
 **You don't need to:**
+
 - Download libraries manually
 - Set include paths
 - Set library paths
@@ -124,6 +122,7 @@ Just build normally - you'll get a universal binary automatically!
 **Problem:** Conan can't find a package in its repositories
 
 **Solution:**
+
 ```bash
 # Update Conan remotes
 conan remote list
@@ -138,6 +137,7 @@ conan remote add conancenter https://center.conan.io
 **Problem:** CMake can't find Conan-installed packages
 
 **Solution:**
+
 ```bash
 # Make sure you ran conan install BEFORE cmake configure
 conan install -s build_type=Release \
@@ -165,6 +165,7 @@ Both must be enabled!
 **Problem:** C++ compiler can't find library headers
 
 **Solution:**
+
 ```bash
 # Clean build and reinstall dependencies
 rm -rf build/
@@ -184,6 +185,7 @@ cmake --build build/Release --config Release
 **Solution:**
 
 1. Check installation location:
+
 ```bash
 # macOS
 ls ~/Library/OFX/Plugins/
@@ -192,6 +194,7 @@ ls ~/Library/OFX/Plugins/
 ```
 
 2. Verify bundle structure:
+
 ```bash
 tree ~/Library/OFX/Plugins/ComfyUISegmentation.ofx.bundle/
 # Should have:
@@ -202,6 +205,7 @@ tree ~/Library/OFX/Plugins/ComfyUISegmentation.ofx.bundle/
 ```
 
 3. Check host OFX paths:
+
    - Some hosts use custom plugin directories
    - Check host preferences/settings
 
@@ -237,6 +241,7 @@ conan list "*:*"
 ```
 
 Should show:
+
 - nlohmann_json/3.11.3
 - cpp-httplib/0.15.3
 - websocketpp/0.8.2
@@ -258,6 +263,7 @@ def requirements(self):
 ```
 
 Then rebuild:
+
 ```bash
 conan install ... --build=missing .
 cmake --preset conan-release ...
@@ -266,15 +272,18 @@ cmake --preset conan-release ...
 ## Platform-Specific Notes
 
 ### macOS
+
 - Universal binaries built by default
 - Plugins install to `~/Library/OFX/Plugins/`
 - Requires macOS 10.15+ for full C++17 support
 
 ### Linux
+
 - Plugins install to `~/.local/share/OFX/Plugins/`
 - May need to install OpenGL dev packages: `sudo apt install libgl-dev`
 
 ### Windows
+
 - Use Visual Studio 2019+ for C++17 support
 - Plugins install to `%COMMONPROGRAMFILES%\OFX\Plugins\`
 - Use CMake GUI or Visual Studio integration
@@ -282,6 +291,7 @@ cmake --preset conan-release ...
 ## Summary
 
 **Key Points:**
+
 1. ✅ Conan manages all C++ dependencies automatically
 2. ✅ No manual library downloads or environment variables needed
 3. ✅ Enable with `-o build_comfyui_plugins=True` (Conan) and `-DBUILD_COMFYUI_PLUGINS=ON` (CMake)
@@ -289,6 +299,7 @@ cmake --preset conan-release ...
 5. ✅ Standard OFX plugin installation paths
 
 **Two-command build:**
+
 ```bash
 conan install -s build_type=Release -o build_comfyui_plugins=True -pr:b=default --build=missing .
 cmake --preset conan-release -DBUILD_COMFYUI_PLUGINS=ON && cmake --build build/Release --parallel

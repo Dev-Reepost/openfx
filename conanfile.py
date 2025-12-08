@@ -52,8 +52,8 @@ class openfx(ConanFile):
 			self.requires("nlohmann_json/3.11.3")
 			self.requires("cpp-httplib/0.15.3")
 			self.requires("websocketpp/0.8.2")
-			# TODO: Add EXR I/O library (OpenEXR directly or simpler alternative)
-			# self.requires("openimageio/2.5.10.1")  # Complex dependency chain
+			self.requires("tinyexr/1.0.7") # Lightweight EXR I/O (header-only)
+			self.requires("miniz/3.0.2") # Compression library for TinyEXR
 			self.requires("openssl/3.2.1") # Required for HTTPS support
 			self.requires("boost/1.84.0", override=True) # Resolve version conflict
 
@@ -79,14 +79,14 @@ class openfx(ConanFile):
 		copy(self, "cmake/*", src=self.source_folder, dst=self.package_folder)
 		copy(self, "LICENSE, README.md, INSTALL.md", src=self.source_folder, dst=self.package_folder)
 		copy(self, "include/*.h", src=self.source_folder, dst=self.package_folder)
-		copy(self,"HostSupport/include/*.h", src=self.source_folder, dst=self.package_folder)
-		copy(self,"Support/*.h", src=self.source_folder, dst=self.package_folder)
-		copy(self,"Support/Plugins/include/*.h", src=self.source_folder, dst=self.package_folder)
-		copy(self,"*.a", src=self.build_folder, dst=os.path.join(self.package_folder, "lib"), keep_path=False)
-		copy(self,"*.lib", src=self.build_folder, dst=os.path.join(self.package_folder, "lib"), keep_path=False)
-		copy(self,"*.ofx", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
-		copy(self,"*.dll", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
-		copy(self,"*.so", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
+		copy(self, "HostSupport/include/*.h", src=self.source_folder, dst=self.package_folder)
+		copy(self, "Support/*.h", src=self.source_folder, dst=self.package_folder)
+		copy(self, "Support/Plugins/include/*.h", src=self.source_folder, dst=self.package_folder)
+		copy(self, "*.a", src=self.build_folder, dst=os.path.join(self.package_folder, "lib"), keep_path=False)
+		copy(self, "*.lib", src=self.build_folder, dst=os.path.join(self.package_folder, "lib"), keep_path=False)
+		copy(self, "*.ofx", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
+		copy(self, "*.dll", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
+		copy(self, "*.so", src=self.build_folder, dst=os.path.join(self.package_folder, "bin"), keep_path=False)
 
 	def package_info(self):
 		libs = collect_libs(self)
