@@ -83,7 +83,48 @@ std::string SAMSegmentationPlugin::getDinoModelName() const
 
 json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPath)
 {
-    if (_logger) _logger->info("Building SAM segmentation workflow");
+    if (_logger) _logger->info("Building SAM segmentation workflow for frame {}", frame);
+
+    // Try to load workflow from file first
+    std::string workflowPath;
+    _workflowFilePath->getValue(workflowPath);
+
+    if (!workflowPath.empty()) {
+        if (_logger) _logger->info("Attempting to load workflow from file: {}", workflowPath);
+
+        try {
+            // Resolve the path (handles bundle resources and absolute paths)
+            std::string resolvedPath = resolveWorkflowPath(workflowPath);
+
+            if (!resolvedPath.empty()) {
+                // Load workflow from file
+                json baseWorkflow = loadWorkflowFromFile(resolvedPath);
+
+                // Customize with parameters and paths
+                json customized = customizeWorkflow(baseWorkflow, frame, inputPath);
+
+                // Add SAM-specific parameter customization
+                json final = customizeWorkflowWithParams(customized, frame);
+
+                if (_logger) _logger->info("Successfully loaded and customized workflow from file");
+                return final;
+            } else {
+                if (_logger) _logger->warn("Could not resolve workflow path, falling back to hardcoded workflow");
+            }
+        } catch (const std::exception& e) {
+            if (_logger) _logger->error("Failed to load workflow from file: {}. Falling back to hardcoded workflow.", e.what());
+        }
+    } else {
+        if (_logger) _logger->info("No workflow file specified, using hardcoded workflow");
+    }
+
+    // Fallback: use hardcoded workflow
+    return buildHardcodedWorkflow(frame, inputPath);
+}
+
+json SAMSegmentationPlugin::buildHardcodedWorkflow(int frame, const std::string& inputPath)
+{
+    if (_logger) _logger->info("Building hardcoded SAM segmentation workflow");
 
     // Get parameter values
     std::string prompt;
@@ -97,25 +138,34 @@ json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPat
     int resolution;
 
     if (resolutionModeIndex == 0) {
-        // "Source" - use source clip dimensions (longer side)
+        // "Source" - use source clip dimensions (shorter side, as SAMPreprocessor scales by short side)
         OfxRectD rod = _srcClip->getRegionOfDefinition(frame);
         int width = static_cast<int>(rod.x2 - rod.x1);
         int height = static_cast<int>(rod.y2 - rod.y1);
-        resolution = std::max(width, height);
+        resolution = std::min(width, height);  // Use SHORTER side - SAMPreprocessor maintains aspect ratio from short side
+        if (_logger) _logger->info("Resolution mode: SOURCE - calculated {}x{} → resolution={} (short side)", width, height, resolution);
     } else if (resolutionModeIndex == 1) {
         resolution = 720;   // 720p
+        if (_logger) _logger->info("Resolution mode: 720p → resolution={}", resolution);
     } else if (resolutionModeIndex == 2) {
         resolution = 1080;  // 1080p
+        if (_logger) _logger->info("Resolution mode: 1080p → resolution={}", resolution);
     } else if (resolutionModeIndex == 3) {
         resolution = 1536;  // 2K
+        if (_logger) _logger->info("Resolution mode: 2K → resolution={}", resolution);
     } else if (resolutionModeIndex == 4) {
         resolution = 2160;  // 4K
+        if (_logger) _logger->info("Resolution mode: 4K → resolution={}", resolution);
     } else {  // Custom
         _customResolution->getValueAtTime(frame, resolution);
+        if (_logger) _logger->info("Resolution mode: CUSTOM → resolution={}", resolution);
     }
 
-    bool linearToSRGB = _linearToSRGB->getValue();
-    bool sRGBToLinear = _sRGBToLinear->getValue();
+    // Always use sRGB conversion (parameters are hidden)
+    bool linearToSRGB = true;
+    bool sRGBToLinear = true;
+    // _linearToSRGB->getValue();  // No longer reading from parameter
+    // _sRGBToLinear->getValue();  // No longer reading from parameter
 
     std::string samModelName = getSAMModelName();
     std::string dinoModelName = getDinoModelName();
@@ -206,7 +256,9 @@ json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPat
             {"class_type", "SAMModelLoader (segment anything)"}
         }},
 
-        // Node 24: SAM preprocessor (RGB image)
+        // Node 24: SAM preprocessor - resizes image to target resolution
+        // This resized image is used by Node 16 for segmentation
+        // The resolution parameter controls output size for performance/quality tradeoff
         {"24", {
             {"inputs", {
                 {"resolution", resolution},
@@ -216,10 +268,11 @@ json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPat
         }},
 
         // Node 25: Join RGB image with alpha mask to create RGBA
+        // Both image and alpha are at the same resolution (from Node 24 and Node 16)
         {"25", {
             {"inputs", {
-                {"image", json::array({"24", 0})},  // RGB from SAMPreprocessor
-                {"alpha", json::array({"16", 1})}   // MASK directly from segmentation
+                {"image", json::array({"24", 0})},  // RGB from SAMPreprocessor (resized to resolution)
+                {"alpha", json::array({"16", 1})}   // MASK from segmentation (same resolution)
             }},
             {"class_type", "JoinImageWithAlpha"}
         }},
@@ -238,7 +291,215 @@ json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPat
         }}
     };
 
+    // Log the complete workflow being sent to ComfyUI for debugging
+    if (_logger) {
+        _logger->info("=== HARDCODED WORKFLOW DUMP ===");
+        _logger->info("Complete workflow JSON: {}", workflow.dump(2));
+        _logger->info("Node 24 (SAMPreprocessor): {}", workflow["24"].dump());
+        _logger->info("Node 16 (GroundingDinoSAMSegment): {}", workflow["16"].dump());
+        _logger->info("Node 27 (SaveEXR): {}", workflow["27"].dump());
+        _logger->info("=== END WORKFLOW DUMP ===");
+    }
+
     return workflow;
+}
+
+json SAMSegmentationPlugin::customizeWorkflowWithParams(const json& baseWorkflow, int frame)
+{
+    // Add SAM-specific parameter customization to workflow loaded from file
+    // This allows template workflows to be customized with UI parameters
+
+    if (_logger) _logger->debug("Customizing workflow with SAM parameters");
+
+    json workflow = baseWorkflow;  // Make a copy
+
+    // Get SAM-specific parameters
+    std::string prompt;
+    _segmentPrompt->getValue(prompt);
+    double threshold = _threshold->getValue();
+
+    // Calculate resolution
+    int resolutionModeIndex;
+    _resolutionMode->getValueAtTime(frame, resolutionModeIndex);
+    int resolution;
+
+    if (resolutionModeIndex == 0) {
+        // "Source" - use source clip dimensions (shorter side, as SAMPreprocessor scales by short side)
+        OfxRectD rod = _srcClip->getRegionOfDefinition(frame);
+        int width = static_cast<int>(rod.x2 - rod.x1);
+        int height = static_cast<int>(rod.y2 - rod.y1);
+        resolution = std::min(width, height);  // Use SHORTER side - SAMPreprocessor maintains aspect ratio from short side
+        if (_logger) _logger->info("Resolution mode: SOURCE - calculated {}x{} → resolution={} (short side)", width, height, resolution);
+    } else if (resolutionModeIndex == 1) {
+        resolution = 720;
+        if (_logger) _logger->info("Resolution mode: 720p → resolution={}", resolution);
+    } else if (resolutionModeIndex == 2) {
+        resolution = 1080;
+        if (_logger) _logger->info("Resolution mode: 1080p → resolution={}", resolution);
+    } else if (resolutionModeIndex == 3) {
+        resolution = 1536;
+        if (_logger) _logger->info("Resolution mode: 1536p → resolution={}", resolution);
+    } else if (resolutionModeIndex == 4) {
+        resolution = 2160;
+        if (_logger) _logger->info("Resolution mode: 2160p (4K) → resolution={}", resolution);
+    } else {
+        _customResolution->getValueAtTime(frame, resolution);
+        if (_logger) _logger->info("Resolution mode: CUSTOM → resolution={}", resolution);
+    }
+
+    // Always use sRGB conversion (parameters are hidden)
+    bool linearToSRGB = true;
+    bool sRGBToLinear = true;
+    // _linearToSRGB->getValue();  // No longer reading from parameter
+    // _sRGBToLinear->getValue();  // No longer reading from parameter
+    
+    std::string samModelName = getSAMModelName();
+    std::string dinoModelName = getDinoModelName();
+
+    // Convert workflow to string for placeholder replacement
+    std::string workflowStr = workflow.dump();
+
+    // Replace SAM-specific placeholders
+    // ${PROMPT} - segmentation prompt
+    // ${THRESHOLD} - detection threshold
+    // ${RESOLUTION} - preprocessing resolution
+    // ${SAM_MODEL} - SAM model name
+    // ${DINO_MODEL} - Grounding DINO model name
+    // ${LINEAR_TO_SRGB} - "true" or "false"
+    // ${SRGB_TO_LINEAR} - "true" or "false"
+
+    size_t pos = 0;
+    std::string placeholder;
+
+    // Replace ${PROMPT}
+    placeholder = "${PROMPT}";
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), prompt);
+    }
+
+    // Replace "${THRESHOLD}" with number (no quotes)
+    // Search for the placeholder INCLUDING surrounding quotes to convert string to number
+    placeholder = "\"${THRESHOLD}\"";
+    std::string thresholdStr = std::to_string(threshold);
+    if (_logger) _logger->info("Replacing \"${{THRESHOLD}}\" with numeric: {}", thresholdStr);
+    int replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), thresholdStr);
+        replaceCount++;
+        if (_logger) _logger->debug("  Replaced THRESHOLD at position {}", pos);
+    }
+    if (_logger) {
+        if (replaceCount == 0) {
+            _logger->warn("THRESHOLD placeholder not found in workflow! Search pattern: {}", placeholder);
+        } else {
+            _logger->info("  Replaced THRESHOLD {} time(s)", replaceCount);
+        }
+    }
+
+    // Replace "${RESOLUTION}" with number (no quotes)
+    placeholder = "\"${RESOLUTION}\"";
+    std::string resolutionStr = std::to_string(resolution);
+    if (_logger) _logger->info("Replacing \"${{RESOLUTION}}\" with numeric: {}", resolutionStr);
+    replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), resolutionStr);
+        replaceCount++;
+        if (_logger) _logger->debug("  Replaced RESOLUTION at position {}", pos);
+    }
+    if (_logger) {
+        if (replaceCount == 0) {
+            _logger->warn("RESOLUTION placeholder not found in workflow! Search pattern: {}", placeholder);
+        } else {
+            _logger->info("  Replaced RESOLUTION {} time(s)", replaceCount);
+        }
+    }
+
+    // Replace ${SAM_MODEL}
+    placeholder = "${SAM_MODEL}";
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), samModelName);
+    }
+
+    // Replace ${DINO_MODEL}
+    placeholder = "${DINO_MODEL}";
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), dinoModelName);
+    }
+
+    // Replace "${LINEAR_TO_SRGB}" with boolean (no quotes)
+    // Search for the placeholder INCLUDING surrounding quotes to convert string to boolean
+    placeholder = "\"${LINEAR_TO_SRGB}\"";
+    std::string linearToSRGBStr = linearToSRGB ? "true" : "false";
+    if (_logger) _logger->info("Replacing \"${{LINEAR_TO_SRGB}}\" with boolean: {}", linearToSRGBStr);
+    replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), linearToSRGBStr);
+        replaceCount++;
+        if (_logger) _logger->debug("  Replaced LINEAR_TO_SRGB at position {}", pos);
+    }
+    if (_logger) {
+        if (replaceCount == 0) {
+            _logger->warn("LINEAR_TO_SRGB placeholder not found in workflow! Search pattern: {}", placeholder);
+        } else {
+            _logger->info("  Replaced LINEAR_TO_SRGB {} time(s)", replaceCount);
+        }
+    }
+
+    // Replace "${SRGB_TO_LINEAR}" with boolean (no quotes)
+    // Search for the placeholder INCLUDING surrounding quotes to convert string to boolean
+    placeholder = "\"${SRGB_TO_LINEAR}\"";
+    std::string sRGBToLinearStr = sRGBToLinear ? "true" : "false";
+    if (_logger) _logger->info("Replacing \"${{SRGB_TO_LINEAR}}\" with boolean: {}", sRGBToLinearStr);
+    replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), sRGBToLinearStr);
+        replaceCount++;
+        if (_logger) _logger->debug("  Replaced SRGB_TO_LINEAR at position {}", pos);
+    }
+    if (_logger) {
+        if (replaceCount == 0) {
+            _logger->warn("SRGB_TO_LINEAR placeholder not found in workflow! Search pattern: {}", placeholder);
+        } else {
+            _logger->info("  Replaced SRGB_TO_LINEAR {} time(s)", replaceCount);
+        }
+    }
+
+    if (_logger) {
+        _logger->debug("SAM parameter customization complete");
+        _logger->debug("  Prompt: {}", prompt);
+        _logger->debug("  Threshold: {}", threshold);
+        _logger->debug("  Resolution: {}", resolution);
+        _logger->debug("  SAM Model: {}", samModelName);
+        _logger->debug("  DINO Model: {}", dinoModelName);
+    }
+
+    // Parse back to JSON
+    try {
+        json finalWorkflow = json::parse(workflowStr);
+
+        // Log critical nodes to verify all replacements worked
+        if (_logger) {
+            if (finalWorkflow.contains("16")) {
+                _logger->info("Node 16 (Segmentation) in final workflow: {}", finalWorkflow["16"].dump());
+            }
+            if (finalWorkflow.contains("24")) {
+                _logger->info("Node 24 (SAMPreprocessor) in final workflow: {}", finalWorkflow["24"].dump());
+            }
+            if (finalWorkflow.contains("27")) {
+                _logger->info("Node 27 (SaveEXR) in final workflow: {}", finalWorkflow["27"].dump());
+            }
+            
+            // Log the COMPLETE final workflow that will be sent to ComfyUI
+            _logger->info("=== FINAL WORKFLOW TO BE SENT TO COMFYUI ===");
+            _logger->info("Complete workflow JSON:\n{}", finalWorkflow.dump(2));
+            _logger->info("=== END FINAL WORKFLOW ===");
+        }
+
+        return finalWorkflow;
+    } catch (const json::exception& e) {
+        if (_logger) _logger->error("Failed to parse customized workflow: {}", e.what());
+        throw std::runtime_error("Failed to parse SAM customized workflow: " + std::string(e.what()));
+    }
 }
 
 std::vector<std::string> SAMSegmentationPlugin::getRequiredModels()
@@ -329,21 +590,23 @@ void SAMSegmentationPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     customResolution->setParent(*samGroup);
     page->addChild(*customResolution);
 
-    // Linear to sRGB (input)
+    // Linear to sRGB (input) - hidden, always enabled
     OFX::BooleanParamDescriptor *linearToSRGB = desc.defineBooleanParam("linearToSRGB");
     linearToSRGB->setLabel("Input: Linear to sRGB");
     linearToSRGB->setHint("Convert input from linear to sRGB color space");
     linearToSRGB->setDefault(true);
+    linearToSRGB->setIsSecret(true);  // Hidden from UI
     linearToSRGB->setParent(*samGroup);
-    page->addChild(*linearToSRGB);
+    // page->addChild(*linearToSRGB);  // Removed from UI
 
-    // sRGB to Linear (output)
+    // sRGB to Linear (output) - hidden, always enabled
     OFX::BooleanParamDescriptor *sRGBToLinear = desc.defineBooleanParam("sRGBToLinear");
     sRGBToLinear->setLabel("Output: sRGB to Linear");
     sRGBToLinear->setHint("Convert output from sRGB to linear color space");
     sRGBToLinear->setDefault(true);
+    sRGBToLinear->setIsSecret(true);  // Hidden from UI
     sRGBToLinear->setParent(*samGroup);
-    page->addChild(*sRGBToLinear);
+    // page->addChild(*sRGBToLinear);  // Removed from UI
 
     // Add common parameters (all to same page with groups)
     BasePlugin::describeCommonParameters(desc, context, page, page, page);

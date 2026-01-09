@@ -220,9 +220,9 @@ clean_build() {
 # Configure CMake
 configure_cmake() {
     log_info "Configuring CMake ($BUILD_TYPE build)..."
-    
+
     cd "$OPENFX_ROOT"
-    
+
     # Ensure Conan is available
     if ! command -v conan &> /dev/null; then
         # Try to find Conan in common locations
@@ -233,12 +233,12 @@ configure_cmake() {
             fi
         done
     fi
-    
+
     if ! command -v conan &> /dev/null; then
         log_error "Conan not found in PATH"
         exit 1
     fi
-    
+
     # Configure with appropriate build type
     local build_type_arg=""
     if [[ "$BUILD_TYPE" == "Debug" ]]; then
@@ -246,14 +246,32 @@ configure_cmake() {
     else
         build_type_arg="Release"
     fi
-    
-    # Install Conan dependencies and generate build files if needed
-    if [[ ! -f "build/$BUILD_TYPE/generators/CMakePresets.json" ]]; then
-        log_info "Installing Conan dependencies..."
-        conan install -s build_type=$BUILD_TYPE -pr:b=default --build=missing .
+
+    # Detect if this is a ComfyUI plugin
+    local is_comfyui_plugin=false
+    local conan_options=""
+    if [[ "$PLUGIN_DIR" == *"ComfyUI"* ]]; then
+        is_comfyui_plugin=true
+        conan_options="-o \"&:build_comfyui_plugins=True\""
+        log_info "Detected ComfyUI plugin - enabling ComfyUI dependencies"
     fi
-    
-    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" -DBUILD_EXAMPLE_PLUGINS=TRUE -DPLUGIN_INSTALLDIR="$INSTALL_DIR"
+
+    # Install Conan dependencies and generate build files if needed
+    if [[ ! -f "build/$BUILD_TYPE/generators/CMakePresets.json" ]] || [[ "$is_comfyui_plugin" == true ]]; then
+        log_info "Installing Conan dependencies..."
+        conan install -s build_type=$BUILD_TYPE -pr:b=default $conan_options --build=missing .
+    fi
+
+    # Additional CMake flags
+    local cmake_flags="-DBUILD_EXAMPLE_PLUGINS=TRUE"
+    if [[ "$is_comfyui_plugin" == true ]]; then
+        cmake_flags="$cmake_flags -DBUILD_COMFYUI_PLUGINS=ON"
+    fi
+    if [[ -n "$INSTALL_DIR" ]]; then
+        cmake_flags="$cmake_flags -DPLUGIN_INSTALLDIR=\"$INSTALL_DIR\""
+    fi
+
+    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" $cmake_flags
     log_success "CMake configuration completed"
 }
 

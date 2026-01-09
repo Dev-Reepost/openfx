@@ -225,6 +225,45 @@ void toOFXBuffer(
     int pixelComponents,
     int bitDepth
 ) {
+    // Defensive parameter validation (prevents crashes from invalid input)
+    if (!dstPixels) {
+        throw std::invalid_argument("toOFXBuffer: dstPixels is NULL - cannot write to invalid buffer");
+    }
+
+    if (image.pixels.empty()) {
+        throw std::invalid_argument("toOFXBuffer: source image pixel data is empty");
+    }
+
+    if (image.width <= 0 || image.height <= 0) {
+        throw std::invalid_argument("toOFXBuffer: invalid image dimensions: " +
+                                   std::to_string(image.width) + "x" + std::to_string(image.height));
+    }
+
+    if (pixelComponents < 1 || pixelComponents > 4) {
+        throw std::invalid_argument("toOFXBuffer: invalid pixel components: " +
+                                   std::to_string(pixelComponents));
+    }
+
+    if (bitDepth != 8 && bitDepth != 16 && bitDepth != 32) {
+        throw std::invalid_argument("toOFXBuffer: unsupported bit depth: " +
+                                   std::to_string(bitDepth));
+    }
+
+    int bytesPerPixel = pixelComponents * (bitDepth / 8);
+    int minRowBytes = image.width * bytesPerPixel;
+
+    if (rowBytes < minRowBytes) {
+        throw std::invalid_argument("toOFXBuffer: rowBytes (" + std::to_string(rowBytes) +
+                                   ") is smaller than minimum required (" + std::to_string(minRowBytes) + ")");
+    }
+
+    size_t expectedPixelCount = static_cast<size_t>(image.width) * image.height * image.channels;
+    if (image.pixels.size() < expectedPixelCount) {
+        throw std::invalid_argument("toOFXBuffer: source image pixel array is too small - expected " +
+                                   std::to_string(expectedPixelCount) + " floats, got " +
+                                   std::to_string(image.pixels.size()));
+    }
+
     uint8_t* dst8 = static_cast<uint8_t*>(dstPixels);
 
     for (int y = 0; y < image.height; ++y) {

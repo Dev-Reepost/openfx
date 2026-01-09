@@ -1,0 +1,65 @@
+{
+  "1": {
+    "inputs": {
+      "filepath": "${INPUT_PATH}",
+      "linear_to_sRGB": "${LINEAR_TO_SRGB}",
+      "image_load_cap": 0,
+      "skip_first_images": 0,
+      "select_every_nth": 1
+    },
+    "class_type": "LoadEXR"
+  },
+
+  "16": {
+    "inputs": {
+      "prompt": "${PROMPT}",
+      "threshold": "${THRESHOLD}",
+      "sam_model": ["18", 0],
+      "grounding_dino_model": ["17", 0],
+      "image": ["1", 0]
+    },
+    "class_type": "GroundingDinoSAMSegment (segment anything)"
+  },
+
+  "17": {
+    "inputs": {
+      "model_name": "${DINO_MODEL}"
+    },
+    "class_type": "GroundingDinoModelLoader (segment anything)"
+  },
+
+  "18": {
+    "inputs": {
+      "model_name": "${SAM_MODEL}"
+    },
+    "class_type": "SAMModelLoader (segment anything)"
+  },
+
+  "24": {
+    "inputs": {
+      "resolution": "${RESOLUTION}",
+      "image": ["1", 0]
+    },
+    "class_type": "SAMPreprocessor"
+  },
+
+  "25": {
+    "inputs": {
+      "image": ["24", 0],
+      "alpha": ["16", 1]
+    },
+    "class_type": "JoinImageWithAlpha"
+  },
+
+  "27": {
+    "inputs": {
+      "filename_prefix": "${OUTPUT_PREFIX}",
+      "sRGB_to_linear": "${SRGB_TO_LINEAR}",
+      "version": -1,
+      "start_frame": "${FRAME}",
+      "frame_pad": 4,
+      "images": ["25", 0]
+    },
+    "class_type": "SaveEXR"
+  }
+}

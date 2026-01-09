@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "description": "Default template workflow for AnyComfy OFX plugin",
+    "note": "Add your custom nodes between LoadEXR (node 1) and SaveEXR (node 2). Make sure to maintain the image chain."
+  },
+
+  "1": {
+    "inputs": {
+      "filepath": "${INPUT_PATH}",
+      "linear_to_sRGB": false,
+      "image_load_cap": 0,
+      "skip_first_images": 0,
+      "select_every_nth": 1
+    },
+    "class_type": "LoadEXR"
+  },
+
+  "2": {
+    "inputs": {
+      "filename_prefix": "${OUTPUT_PREFIX}",
+      "sRGB_to_linear": false,
+      "version": -1,
+      "start_frame": "${FRAME}",
+      "frame_pad": 4,
+      "images": ["1", 0]
+    },
+    "class_type": "SaveEXR"
+  }
+}

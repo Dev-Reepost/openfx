@@ -51,11 +51,10 @@ class openfx(ConanFile):
 		if self.options.build_comfyui_plugins:
 			self.requires("nlohmann_json/3.11.3")
 			self.requires("cpp-httplib/0.15.3")
-			self.requires("websocketpp/0.8.2")
+			self.requires("ixwebsocket/11.4.6") # Modern WebSocket library with minimal dependencies
 			self.requires("tinyexr/1.0.7") # Lightweight EXR I/O (header-only)
 			self.requires("miniz/3.0.2") # Compression library for TinyEXR
 			self.requires("openssl/3.2.1") # Required for HTTPS support
-			self.requires("boost/1.84.0", override=True) # Resolve version conflict
 
 	def layout(self):
 		cmake_layout(self)

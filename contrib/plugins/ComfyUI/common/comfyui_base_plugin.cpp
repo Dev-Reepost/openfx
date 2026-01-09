@@ -387,8 +387,15 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     _projectName = fetchStringParam("projectName");
     _workflowName = fetchStringParam("workflowName");
     _outputVersion = fetchStringParam("outputVersion");
+    _workflowFilePath = fetchStringParam("workflowFilePath");
     _enableCache = fetchBooleanParam("enableCache");
     _timeout = fetchIntParam("timeout");
+
+    // Fetch async rendering parameters
+    _asyncMode = fetchChoiceParam("asyncMode");
+    _placeholderMode = fetchChoiceParam("placeholderMode");
+    _refreshTrigger = fetchDoubleParam("refreshTrigger");
+    _jobStatus = fetchStringParam("jobStatus");
 
     // Initialize project status indicator color based on initial project name state
     if (_projectName) {
@@ -418,6 +425,9 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     } else {
         if (_logger) _logger->error("FAILED to fetch projectName parameter!");
     }
+
+    // NOTE: Job manager will be initialized lazily when needed (after _comfyClient is created)
+    // We can't create it here because _comfyClient might not exist yet
 
     if (_logger) _logger->info("BasePlugin constructor completed successfully");
 }
@@ -479,9 +489,11 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
 
 void BasePlugin::render(const OFX::RenderArguments &args)
 {
+    int frame = static_cast<int>(args.time);
+
     if (_logger) {
         _logger->info("========================================");
-        _logger->info("RENDER STARTED - Frame: {}", static_cast<int>(args.time));
+        _logger->info("RENDER STARTED - Frame: {}", frame);
         _logger->info("Render window: ({},{}) to ({},{})",
                      args.renderWindow.x1, args.renderWindow.y1,
                      args.renderWindow.x2, args.renderWindow.y2);
@@ -516,6 +528,33 @@ void BasePlugin::render(const OFX::RenderArguments &args)
 
     std::lock_guard<std::mutex> lock(_renderMutex);  // Thread-safe for concurrent renders
 
+    // CRITICAL FIX: Detect proxy/preview renders (Resolve thumbnails, scrubbing, etc.)
+    // For proxy renders, use fast passthrough instead of full ComfyUI workflow
+    // This prevents crashes from NULL buffers and provides instant feedback
+    bool isProxyRender = (args.renderScale.x < 1.0 || args.renderScale.y < 1.0);
+
+    if (isProxyRender) {
+        if (_logger) {
+            _logger->info("=== PROXY/PREVIEW RENDER DETECTED ===");
+            _logger->info("Render scale: {}x{} (< 1.0 = proxy mode)",
+                         args.renderScale.x, args.renderScale.y);
+            _logger->info("Using fast passthrough (no ComfyUI processing)");
+            _logger->info("This is expected for thumbnails, timeline scrubbing, and draft previews");
+        }
+
+        renderPassthrough(args);
+
+        if (_logger) {
+            _logger->info("Proxy render completed successfully");
+        }
+        return;
+    }
+
+    if (_logger) {
+        _logger->info("Full resolution render (scale: {}x{}) - will execute ComfyUI workflow",
+                     args.renderScale.x, args.renderScale.y);
+    }
+
     // Check if processing is enabled - if not, just passthrough
     bool processingEnabled = _enableProcessing->getValue();
     if (!processingEnabled) {
@@ -535,86 +574,18 @@ void BasePlugin::render(const OFX::RenderArguments &args)
 
     if (_logger) _logger->info("ComfyUI processing ENABLED");
 
-    // Validate required parameters
-    std::string projectName;
-    _projectName->getValue(projectName);
+    // Always use non-blocking mode (asyncModeValue = 1) - parameter is hidden
+    int asyncModeValue = 1;
+    // _asyncMode->getValue(asyncModeValue);  // No longer reading from parameter
 
-    if (projectName.empty()) {
-        std::string warningMsg = "Project Name is required but not set. Please set the Project Name parameter in the plugin settings.";
-        if (_logger) _logger->warn(warningMsg);
-        setPersistentMessage(OFX::Message::eMessageWarning, "", warningMsg.c_str());
-
-        // Return passthrough instead of throwing - this is a configuration issue, not a render failure
-        // Throwing causes Flame to retry the render multiple times thinking it's a temporary error
-        if (_srcClip && _srcClip->isConnected()) {
-            std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
-            std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
-
-            if (src.get() && dst.get()) {
-                copyPixelData(src.get(), dst.get());
-            }
-        }
-        return;
-    }
-
-    if (_logger) _logger->info("Project Name validation passed: '{}'", projectName);
-
-    // Check if source is connected
-    if (!_srcClip || !_srcClip->isConnected()) {
-        if (_logger) _logger->error("Source clip not connected");
-        throw std::runtime_error("Source clip not connected");
-    }
-
-    if (_logger) _logger->info("Source clip connected and valid");
-
-    // Pre-create output directory structure on shared mount
-    // This ensures the ComfyUI server can write files without needing os.makedirs()
-    std::string mountPath, workflowName, version;
-    _sharedMountPath->getValue(mountPath);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
-
-    std::string outputDir = mountPath + "/out/" + projectName + "/" + workflowName + "/" + version;
-    if (_logger) _logger->info("Pre-creating output directory: {}", outputDir);
-
-    try {
-        if (!ImageIO::createDirectoryRecursive(outputDir)) {
-            std::string errorMsg = "Failed to create output directory: " + outputDir;
-            if (_logger) _logger->error(errorMsg);
-            setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
-            throw std::runtime_error(errorMsg);
-        }
-        if (_logger) _logger->info("Output directory created successfully");
-    } catch (const std::exception& e) {
-        std::string errorMsg = std::string("Failed to create output directory: ") + e.what();
-        if (_logger) _logger->error(errorMsg);
-        setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
-        throw std::runtime_error(errorMsg);
-    }
-
-    if (_logger) _logger->info("Executing ComfyUI workflow");
-
-    // Start progress reporting
-    progressStart("Processing with ComfyUI...");
-
-    try {
-        // Execute workflow synchronously (blocks but shows progress)
-        executeWorkflow(args);
-
-        progressEnd();
-        if (_logger) {
-            _logger->info("========================================");
-            _logger->info("RENDER COMPLETED SUCCESSFULLY");
-            _logger->info("========================================");
-        }
-    } catch (const std::exception& e) {
-        progressEnd();
-        if (_logger) {
-            _logger->error("========================================");
-            _logger->error("RENDER FAILED: {}", e.what());
-            _logger->error("========================================");
-        }
-        throw;
+    if (asyncModeValue == 0) {
+        // BLOCKING MODE - traditional behavior
+        if (_logger) _logger->info("Rendering in BLOCKING mode");
+        renderBlocking(args);
+    } else {
+        // NON-BLOCKING MODE - async rendering with placeholder
+        if (_logger) _logger->info("Rendering in NON-BLOCKING mode");
+        renderAsync(args);
     }
 }
 
@@ -723,7 +694,14 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
         if (dstBitDepth == OFX::eBitDepthUByte) dstBitDepthInt = 8;
         else if (dstBitDepth == OFX::eBitDepthUShort) dstBitDepthInt = 16;
 
-        ImageIO::toOFXBuffer(outputImageData, dst->getPixelData(), dst->getRowBytes(), dstPixelComponents, dstBitDepthInt);
+        // Critical: Validate pixel data pointer before use
+        void* dstPixelData = dst->getPixelData();
+        if (!dstPixelData) {
+            if (_logger) _logger->error("CRITICAL: Destination pixel data pointer is NULL (cached path)!");
+            throw std::runtime_error("Failed to allocate destination image buffer for cached result");
+        }
+
+        ImageIO::toOFXBuffer(outputImageData, dstPixelData, dst->getRowBytes(), dstPixelComponents, dstBitDepthInt);
         if (_logger) _logger->info("Cached result loaded successfully");
 
         progressUpdate(1.0);
@@ -925,12 +903,83 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
                                  std::to_string(resultImage.height));
     }
 
-    if (_logger) _logger->info("Copying image data to OFX buffer");
-    ImageIO::toOFXBuffer(resultImage, dst->getPixelData(),
+    // Critical: Validate pixel data pointer before use (prevents SIGSEGV crash)
+    void* dstPixelData = dst->getPixelData();
+    if (!dstPixelData) {
+        if (_logger) _logger->error("CRITICAL: Destination pixel data pointer is NULL!");
+        if (_logger) _logger->error("This may indicate buffer allocation failure or unsupported format");
+        if (_logger) _logger->error("Buffer details: {}x{}, {} components, {} bits, {} bytes/row",
+                                   dstWidth, dstHeight, dstPixelComponents, dstBitDepthInt, dstRowBytes);
+        throw std::runtime_error("Failed to allocate destination image buffer. "
+                                "This may be caused by unsupported image format, resolution, or insufficient memory. "
+                                "Check DaVinci Resolve project settings and available system memory.");
+    }
+
+    // Additional validation: Check buffer size is reasonable
+    size_t expectedBufferSize = static_cast<size_t>(dstHeight) * dstRowBytes;
+    size_t requiredSize = static_cast<size_t>(resultImage.width) * resultImage.height *
+                         dstPixelComponents * (dstBitDepthInt / 8);
+
+    if (_logger) _logger->info("Buffer validation: expected {} bytes, required {} bytes",
+                               expectedBufferSize, requiredSize);
+
+    if (expectedBufferSize < requiredSize) {
+        if (_logger) _logger->error("Buffer size mismatch: expected {} bytes, but need {} bytes",
+                                   expectedBufferSize, requiredSize);
+        throw std::runtime_error("Destination buffer is too small for image data");
+    }
+
+    if (_logger) _logger->info("Copying image data to OFX buffer (pointer: {})", dstPixelData);
+    ImageIO::toOFXBuffer(resultImage, dstPixelData,
                         dstRowBytes, dstPixelComponents, dstBitDepthInt);
 
     if (_logger) _logger->info("Image data copied successfully");
     progressUpdate(1.0);
+}
+
+void BasePlugin::renderPassthrough(const OFX::RenderArguments &args)
+{
+    // Fast passthrough for proxy/preview renders
+    // This provides instant visual feedback without executing the full ComfyUI workflow
+
+    if (_logger) {
+        _logger->info("renderPassthrough: Fetching source and destination images");
+    }
+
+    // Fetch source and destination images
+    std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+    std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
+
+    if (!src.get()) {
+        if (_logger) _logger->error("renderPassthrough: Failed to fetch source image");
+        return;  // Graceful failure for previews
+    }
+
+    if (!dst.get()) {
+        if (_logger) _logger->error("renderPassthrough: Failed to fetch destination image");
+        return;  // Graceful failure for previews
+    }
+
+    // Critical: Validate destination pixel data (prevents Resolve crash)
+    void* dstPixels = dst->getPixelData();
+    if (!dstPixels) {
+        if (_logger) {
+            _logger->warn("renderPassthrough: Destination buffer is NULL");
+            _logger->warn("This is acceptable for proxy renders - skipping frame");
+        }
+        return;  // Graceful failure - no crash
+    }
+
+    if (_logger) {
+        _logger->info("renderPassthrough: Copying source to destination");
+    }
+
+    // Use existing copyPixelData function
+    copyPixelData(src.get(), dst.get());
+
+    if (_logger) {
+        _logger->info("renderPassthrough: Completed successfully");
+    }
 }
 
 void BasePlugin::copyPixelData(const OFX::Image* src, OFX::Image* dst)
@@ -1263,8 +1312,23 @@ std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
     // Replace all forward slashes with backslashes
     std::replace(windowsPath.begin(), windowsPath.end(), '/', '\\');
 
-    if (_logger) _logger->info("Converted path: {}", windowsPath);
-    return windowsPath;
+    if (_logger) _logger->info("  Windows path (before JSON escaping): {}", windowsPath);
+
+    // CRITICAL: Escape backslashes for JSON (\ -> \\)
+    // JSON requires backslashes to be escaped
+    // Example: Z:\in\test.exr -> Z:\\in\\test.exr
+    std::string jsonPath;
+    jsonPath.reserve(windowsPath.length() * 2);  // Reserve space for worst case
+    for (char c : windowsPath) {
+        if (c == '\\') {
+            jsonPath += "\\\\";  // Escape backslash
+        } else {
+            jsonPath += c;
+        }
+    }
+
+    if (_logger) _logger->info("  Final JSON-escaped path: {}", jsonPath);
+    return jsonPath;
 }
 
 std::string BasePlugin::constructExpectedOutputPath(int frame)
@@ -1335,6 +1399,1108 @@ std::string BasePlugin::getEffectiveBasename()
     }
 }
 
+// ============================================================================
+// Workflow File Management
+// ============================================================================
+
+std::string BasePlugin::getBundleResourcePath(const std::string& resourceName)
+{
+#ifdef __APPLE__
+    // On macOS, use CoreFoundation to locate bundle resources
+    // Try to get bundle from plugin binary path
+    std::string pluginPath;
+    try {
+        pluginPath = getPropertySet().propGetString(kOfxPluginPropFilePath, false);
+        if (_logger) _logger->debug("Plugin file path: {}", pluginPath);
+    } catch (...) {
+        if (_logger) _logger->warn("Could not retrieve plugin file path");
+        return "";
+    }
+
+    // Plugin path format: /path/to/Plugin.ofx.bundle/Contents/MacOS/Plugin.ofx
+    // We want: /path/to/Plugin.ofx.bundle/Contents/Resources/{resourceName}
+
+    size_t bundlePos = pluginPath.find(".ofx.bundle");
+    if (bundlePos == std::string::npos) {
+        if (_logger) _logger->warn("Plugin path does not contain .ofx.bundle: {}", pluginPath);
+        return "";
+    }
+
+    // Extract bundle path (include .ofx.bundle)
+    std::string bundlePath = pluginPath.substr(0, bundlePos + 11); // +11 for ".ofx.bundle"
+    std::string resourcePath = bundlePath + "/Contents/Resources/" + resourceName;
+
+    if (_logger) _logger->debug("Resolved bundle resource path: {}", resourcePath);
+    return resourcePath;
+
+#elif defined(__linux__)
+    // On Linux, bundle structure: Plugin.ofx.bundle/Contents/Linux-{arch}/Plugin.ofx
+    //                 Resources: Plugin.ofx.bundle/Resources/{resourceName}
+    std::string pluginPath;
+    try {
+        pluginPath = getPropertySet().propGetString(kOfxPluginPropFilePath, false);
+        if (_logger) _logger->debug("Plugin file path: {}", pluginPath);
+    } catch (...) {
+        if (_logger) _logger->warn("Could not retrieve plugin file path");
+        return "";
+    }
+
+    size_t bundlePos = pluginPath.find(".ofx.bundle");
+    if (bundlePos == std::string::npos) {
+        if (_logger) _logger->warn("Plugin path does not contain .ofx.bundle: {}", pluginPath);
+        return "";
+    }
+
+    std::string bundlePath = pluginPath.substr(0, bundlePos + 11);
+    std::string resourcePath = bundlePath + "/Resources/" + resourceName;
+
+    if (_logger) _logger->debug("Resolved bundle resource path: {}", resourcePath);
+    return resourcePath;
+
+#else
+    // Windows or unsupported platform
+    if (_logger) _logger->warn("Bundle resource lookup not implemented for this platform");
+    return "";
+#endif
+}
+
+std::string BasePlugin::resolveWorkflowPath(const std::string& workflowPath)
+{
+    if (_logger) _logger->info("Resolving workflow path: {}", workflowPath);
+
+    // If path is absolute and exists, use it directly
+    if (!workflowPath.empty() && workflowPath[0] == '/') {
+        std::ifstream test(workflowPath);
+        if (test.good()) {
+            test.close();
+            if (_logger) _logger->info("Using absolute workflow path: {}", workflowPath);
+            return workflowPath;
+        }
+    }
+
+    // If path starts with "resources/", treat it as bundle-relative
+    if (workflowPath.find("resources/") == 0) {
+        std::string bundlePath = getBundleResourcePath(workflowPath.substr(10)); // Skip "resources/"
+        if (!bundlePath.empty()) {
+            std::ifstream test(bundlePath);
+            if (test.good()) {
+                test.close();
+                if (_logger) _logger->info("Found workflow in bundle: {}", bundlePath);
+                return bundlePath;
+            }
+        }
+    }
+
+    // Try as bundle-relative path directly
+    std::string bundlePath = getBundleResourcePath(workflowPath);
+    if (!bundlePath.empty()) {
+        std::ifstream test(bundlePath);
+        if (test.good()) {
+            test.close();
+            if (_logger) _logger->info("Found workflow in bundle: {}", bundlePath);
+            return bundlePath;
+        }
+    }
+
+    if (_logger) _logger->warn("Could not resolve workflow path: {}", workflowPath);
+    return "";
+}
+
+json BasePlugin::loadWorkflowFromFile(const std::string& filepath)
+{
+    if (_logger) _logger->info("Loading workflow from file: {}", filepath);
+
+    if (filepath.empty()) {
+        throw std::runtime_error("Workflow file path is empty");
+    }
+
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::string error = "Failed to open workflow file: " + filepath;
+        if (_logger) _logger->error(error);
+        throw std::runtime_error(error);
+    }
+
+    try {
+        // Read entire file as string first (don't parse yet - file may have placeholders)
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string workflowStr = buffer.str();
+
+        if (_logger) {
+            _logger->info("Workflow file read successfully: {} bytes", workflowStr.size());
+        }
+
+        // Parse as JSON - this will work if file has no placeholders, or
+        // will be done after placeholder replacement in customizeWorkflowWithParams()
+        json workflow = json::parse(workflowStr);
+
+        if (_logger) {
+            _logger->debug("Workflow parsed successfully");
+        }
+
+        return workflow;
+    } catch (const json::exception& e) {
+        std::string error = "Failed to parse workflow JSON: " + std::string(e.what());
+        if (_logger) _logger->error(error);
+        throw std::runtime_error(error);
+    }
+}
+
+json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const std::string& inputPath)
+{
+    // Default implementation: replace placeholders in workflow JSON
+    // Derived classes can override for more complex customization
+
+    if (_logger) _logger->debug("Customizing workflow for frame {}", frame);
+
+    // Convert the workflow to a string for placeholder replacement
+    std::string workflowStr = baseWorkflow.dump();
+
+    // Get parameters for replacements
+    std::string mountPath, project, workflowName, version;
+    _sharedMountPath->getValue(mountPath);
+    _projectName->getValue(project);
+    _workflowName->getValue(workflowName);
+    _outputVersion->getValue(version);
+
+    std::string basename = getEffectiveBasename();
+
+    // Build output prefix
+    std::ostringstream outputPrefix;
+    outputPrefix << mountPath << "/out/" << project << "/" << workflowName
+                 << "/" << version << "/" << basename;
+
+    // Convert paths for ComfyUI
+    std::string comfyInputPath = convertPathForComfyUI(inputPath);
+    std::string comfyOutputPrefix = convertPathForComfyUI(outputPrefix.str());
+
+    // Common placeholder replacements
+    // ${INPUT_PATH} - input EXR file path (Windows format for ComfyUI)
+    // ${OUTPUT_PREFIX} - output file prefix (Windows format for ComfyUI)
+    // ${FRAME} - current frame number
+
+    size_t pos = 0;
+    std::string placeholder;
+
+    // Replace ${INPUT_PATH}
+    placeholder = "${INPUT_PATH}";
+    if (_logger) _logger->debug("Replacing ${{INPUT_PATH}} with: {}", comfyInputPath);
+    int replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), comfyInputPath);
+        replaceCount++;
+    }
+    if (_logger && replaceCount == 0) {
+        _logger->warn("INPUT_PATH placeholder not found in workflow!");
+    }
+
+    // Replace ${OUTPUT_PREFIX}
+    placeholder = "${OUTPUT_PREFIX}";
+    if (_logger) _logger->debug("Replacing ${{OUTPUT_PREFIX}} with: {}", comfyOutputPrefix);
+    replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), comfyOutputPrefix);
+        replaceCount++;
+    }
+    if (_logger && replaceCount == 0) {
+        _logger->warn("OUTPUT_PREFIX placeholder not found in workflow!");
+    }
+
+    // Replace "${FRAME}" with number (no quotes)
+    // Search for the placeholder INCLUDING surrounding quotes to convert string to number
+    placeholder = "\"${FRAME}\"";
+    std::string frameStr = std::to_string(frame);
+    if (_logger) _logger->info("Replacing \"${{FRAME}}\" with numeric: {}", frameStr);
+    replaceCount = 0;
+    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
+        workflowStr.replace(pos, placeholder.length(), frameStr);
+        replaceCount++;
+        if (_logger) _logger->debug("  Replaced FRAME at position {}", pos);
+    }
+    if (_logger) {
+        if (replaceCount == 0) {
+            _logger->warn("FRAME placeholder not found in workflow! Search pattern: {}", placeholder);
+        } else {
+            _logger->info("  Replaced FRAME {} time(s)", replaceCount);
+        }
+    }
+
+    if (_logger) {
+        _logger->debug("Workflow customization complete");
+        _logger->trace("Customized workflow:\n{}", workflowStr.substr(0, 500) + "...");
+    }
+
+    // Parse back to JSON
+    try {
+        json finalWorkflow = json::parse(workflowStr);
+
+        // Log the workflow after base customization (before plugin-specific customization)
+        if (_logger) {
+            _logger->debug("=== INTERMEDIATE WORKFLOW (after base customization) ===");
+            _logger->debug("Workflow JSON after base replacements: {}", finalWorkflow.dump(2));
+            _logger->debug("=== END INTERMEDIATE WORKFLOW ===");
+            _logger->info("Base workflow customization complete (paths and frame replaced)");
+        }
+
+        return finalWorkflow;
+    } catch (const json::exception& e) {
+        std::string error = "Failed to parse customized workflow: " + std::string(e.what());
+        if (_logger) _logger->error(error);
+        throw std::runtime_error(error);
+    }
+}
+
+// ============================================================================
+// Async Rendering Helper Methods
+// ============================================================================
+
+void BasePlugin::renderBlocking(const OFX::RenderArguments &args)
+{
+    // Traditional blocking render - same as old render() logic
+    int frame = static_cast<int>(args.time);
+
+    // Validate required parameters
+    std::string projectName;
+    _projectName->getValue(projectName);
+
+    if (projectName.empty()) {
+        std::string warningMsg = "Project Name is required but not set. Please set the Project Name parameter in the plugin settings.";
+        if (_logger) _logger->warn(warningMsg);
+        setPersistentMessage(OFX::Message::eMessageWarning, "", warningMsg.c_str());
+
+        // Return passthrough
+        if (_srcClip && _srcClip->isConnected()) {
+            std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+            std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
+            if (src.get() && dst.get()) {
+                copyPixelData(src.get(), dst.get());
+            }
+        }
+        return;
+    }
+
+    // Check if source is connected
+    if (!_srcClip || !_srcClip->isConnected()) {
+        if (_logger) _logger->error("Source clip not connected");
+        throw std::runtime_error("Source clip not connected");
+    }
+
+    // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
+    std::string mountPath, workflowName, version, serverMount;
+    _sharedMountPath->getValue(mountPath);
+    _workflowName->getValue(workflowName);
+    _outputVersion->getValue(version);
+    _serverMountPoint->getValue(serverMount);
+
+    if (_logger) {
+        _logger->info("========================================");
+        _logger->info("DIRECTORY CREATION");
+        _logger->info("========================================");
+        _logger->info("Client mount: {}", mountPath);
+        _logger->info("Server mount: {}", serverMount);
+    }
+
+    // First, ensure the base /out directory exists
+    std::string baseOutDir = mountPath + "/out";
+    try {
+        // Check if mount path exists
+        struct stat mountStat;
+        if (stat(mountPath.c_str(), &mountStat) != 0 || !S_ISDIR(mountStat.st_mode)) {
+            std::string errorMsg = "Shared mount path does not exist or is not accessible: " + mountPath;
+            errorMsg += "\n\nPlease verify:";
+            errorMsg += "\n1. The shared mount is properly configured";
+            errorMsg += "\n2. The mount path is accessible from this machine";
+            errorMsg += "\n3. You have write permissions to the mount";
+            if (_logger) _logger->error(errorMsg);
+            setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+            throw std::runtime_error(errorMsg);
+        }
+
+        // Create base /out directory
+        if (_logger) _logger->info("Creating base output directory: {}", baseOutDir);
+        if (!ImageIO::createDirectoryRecursive(baseOutDir)) {
+            std::string errorMsg = "Failed to create base output directory: " + baseOutDir;
+            if (_logger) _logger->error(errorMsg);
+            setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+            throw std::runtime_error(errorMsg);
+        }
+    } catch (const std::exception& e) {
+        std::string errorMsg = std::string("Failed to create base output directory: ") + e.what();
+        if (_logger) _logger->error(errorMsg);
+        setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+        throw std::runtime_error(errorMsg);
+    }
+
+    // Now create the full output directory path
+    std::string outputDir = mountPath + "/out/" + projectName + "/" + workflowName + "/" + version;
+    if (_logger) _logger->info("Creating full output directory: {}", outputDir);
+
+    try {
+        if (!ImageIO::createDirectoryRecursive(outputDir)) {
+            std::string errorMsg = "Failed to create output directory: " + outputDir;
+            if (_logger) _logger->error(errorMsg);
+            setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+            throw std::runtime_error(errorMsg);
+        }
+
+        // Verify directory was created successfully
+        struct stat st;
+        if (stat(outputDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            std::string errorMsg = "Directory creation succeeded but verification failed: " + outputDir;
+            if (_logger) _logger->error(errorMsg);
+            setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+            throw std::runtime_error(errorMsg);
+        }
+
+        if (_logger) {
+            _logger->info("Successfully created and verified directory: {}", outputDir);
+
+            // Log what the server-side path will be
+            std::string serverPath = outputDir;
+            if (!mountPath.empty() && serverPath.find(mountPath) == 0) {
+                serverPath.replace(0, mountPath.length(), serverMount);
+            }
+            std::replace(serverPath.begin(), serverPath.end(), '/', '\\');
+            _logger->info("Server-side path should be: {}", serverPath);
+            _logger->info("");
+            _logger->info("IMPORTANT: If ComfyUI fails with 'path not found' error,");
+            _logger->info("manually verify that this directory exists on the Windows server:");
+            _logger->info("  {}", serverPath);
+            _logger->info("========================================");
+        }
+    } catch (const std::exception& e) {
+        std::string errorMsg = std::string("Failed to create output directory: ") + e.what();
+        if (_logger) _logger->error(errorMsg);
+        setPersistentMessage(OFX::Message::eMessageError, "", errorMsg.c_str());
+        throw std::runtime_error(errorMsg);
+    }
+
+    // Execute workflow synchronously (BLOCKING)
+    progressStart("Processing with ComfyUI...");
+
+    try {
+        executeWorkflow(args);
+        progressEnd();
+        if (_logger) {
+            _logger->info("========================================");
+            _logger->info("RENDER COMPLETED SUCCESSFULLY");
+            _logger->info("========================================");
+        }
+    } catch (const std::exception& e) {
+        progressEnd();
+        if (_logger) {
+            _logger->error("========================================");
+            _logger->error("RENDER FAILED: {}", e.what());
+            _logger->error("========================================");
+        }
+        throw;
+    }
+}
+
+void BasePlugin::renderAsync(const OFX::RenderArguments &args)
+{
+    auto renderStartTime = std::chrono::steady_clock::now();
+    int frame = static_cast<int>(args.time);
+
+    if (_logger) {
+        _logger->info("========================================");
+        _logger->info("renderAsync() START - Frame {}", frame);
+    }
+
+    // STEP 1: Check cache first (instant return if available)
+    auto cacheCheckStart = std::chrono::steady_clock::now();
+    std::string cachedPath = constructExpectedOutputPath(frame);
+
+    // Check in-memory cache first (instant!)
+    bool cachedInMemory = false;
+    {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        cachedInMemory = (_cacheFileExists.find(cachedPath) != _cacheFileExists.end());
+    }
+
+    bool fileExists = false;
+    if (cachedInMemory) {
+        // Fast path: we know the file exists from previous check
+        fileExists = true;
+        if (_logger) {
+            _logger->debug("Frame {}: In-memory cache HIT for {}", frame, cachedPath);
+        }
+    } else {
+        // Slow path: check filesystem (only once per file)
+        std::ifstream cacheTest(cachedPath);
+        fileExists = cacheTest.good();
+        if (fileExists) {
+            cacheTest.close();
+            // Remember this file exists (avoid future slow checks)
+            std::lock_guard<std::mutex> lock(_cacheMutex);
+            _cacheFileExists.insert(cachedPath);
+        }
+    }
+
+    auto cacheCheckDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - cacheCheckStart);
+
+    if (fileExists) {
+        if (_logger) {
+            _logger->info("Frame {}: Cache HIT (check took {} ms, cached_in_mem: {})",
+                         frame, cacheCheckDuration.count(), cachedInMemory);
+            _logger->info("  Path: {}", cachedPath);
+        }
+
+        try {
+            auto loadStart = std::chrono::steady_clock::now();
+            loadCachedResult(args, cachedPath);
+            auto loadDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - loadStart);
+
+            auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - renderStartTime);
+
+            if (_logger) {
+                _logger->info("Frame {}: Loaded from cache (load: {} ms, total: {} ms)",
+                             frame, loadDuration.count(), totalDuration.count());
+                _logger->info("========================================");
+            }
+            return;  // ✓ INSTANT, non-blocking
+        } catch (const std::exception& e) {
+            std::string errorMsg = e.what();
+            bool isDimensionMismatch = (errorMsg.find("dimensions") != std::string::npos &&
+                                       errorMsg.find("do not match") != std::string::npos);
+
+            if (_logger) {
+                if (isDimensionMismatch) {
+                    _logger->warn("Frame {}: Cached file has wrong dimensions - will invalidate and re-render", frame);
+                    _logger->info("  Error details: {}", errorMsg);
+                } else {
+                    _logger->error("Frame {}: Failed to load cached result: {}", frame, errorMsg);
+                }
+            }
+
+            // Remove from memory cache
+            {
+                std::lock_guard<std::mutex> lock(_cacheMutex);
+                _cacheFileExists.erase(cachedPath);
+            }
+
+            // If dimension mismatch, rename the wrong-resolution file so it doesn't interfere
+            if (isDimensionMismatch) {
+                try {
+                    std::string renamedPath = cachedPath + ".wrong_resolution";
+                    if (_logger) {
+                        _logger->info("  Renaming wrong-resolution cached file to: {}", renamedPath);
+                    }
+                    std::filesystem::rename(cachedPath, renamedPath);
+                } catch (const std::exception& renameError) {
+                    if (_logger) {
+                        _logger->warn("  Could not rename cached file: {}", renameError.what());
+                    }
+                }
+            }
+
+            // Fall through to re-render
+        }
+    } else {
+        if (_logger) {
+            _logger->info("Frame {}: Cache MISS (check took {} ms)", frame, cacheCheckDuration.count());
+        }
+    }
+
+    // Lazy initialize job manager (after _comfyClient exists)
+    if (!_jobManager && _comfyClient) {
+        if (_logger) _logger->info("Initializing AsyncJobManager");
+        _jobManager.reset(new AsyncJobManager(_comfyClient.get(), _logger));
+
+        // Set completion callback
+        _jobManager->setCompletionCallback([this](int completedFrame, bool success) {
+            this->onJobComplete(completedFrame, success);
+        });
+
+        if (_logger) _logger->info("AsyncJobManager initialized successfully");
+    }
+
+    // STEP 2: Check if job already pending
+    if (_jobManager && _jobManager->isJobPending(frame)) {
+        JobStatus status = _jobManager->getJobStatus(frame);
+        if (_logger) {
+            _logger->info("Frame {}: Job already pending (status: {})",
+                         frame, jobStatusToString(status));
+        }
+
+        // Return placeholder immediately
+        returnPlaceholder(args, frame);
+        return;  // ✓ NON-BLOCKING
+    }
+
+    // STEP 3: Submit new async job
+    if (_logger) _logger->info("Frame {}: Cache MISS - submitting async job", frame);
+
+    try {
+        // Validate project name
+        std::string projectName;
+        _projectName->getValue(projectName);
+
+        if (projectName.empty()) {
+            if (_logger) _logger->warn("Frame {}: Project name empty, returning passthrough", frame);
+            returnPlaceholder(args, frame);
+            return;
+        }
+
+        // Get mount path info for directory creation
+        std::string mountPath, workflowName, version;
+        _sharedMountPath->getValue(mountPath);
+        _workflowName->getValue(workflowName);
+        _outputVersion->getValue(version);
+
+        // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
+        // This MUST happen before async submission to ensure directories exist
+        std::string outputDir = mountPath + "/out/" + projectName + "/" + workflowName + "/" + version;
+
+        try {
+            // Check if mount path exists
+            struct stat mountStat;
+            if (stat(mountPath.c_str(), &mountStat) != 0 || !S_ISDIR(mountStat.st_mode)) {
+                std::string errorMsg = "Shared mount path does not exist or is not accessible: " + mountPath;
+                if (_logger) _logger->error("Frame {}: {}", frame, errorMsg);
+                returnPlaceholder(args, frame);
+                return;
+            }
+
+            // Create base /out directory
+            std::string baseOutDir = mountPath + "/out";
+            if (!ImageIO::createDirectoryRecursive(baseOutDir)) {
+                std::string errorMsg = "Failed to create base output directory: " + baseOutDir;
+                if (_logger) _logger->error("Frame {}: {}", frame, errorMsg);
+                returnPlaceholder(args, frame);
+                return;
+            }
+
+            // Create full output directory path
+            if (!ImageIO::createDirectoryRecursive(outputDir)) {
+                std::string errorMsg = "Failed to create output directory: " + outputDir;
+                if (_logger) _logger->error("Frame {}: {}", frame, errorMsg);
+                returnPlaceholder(args, frame);
+                return;
+            }
+
+            // Verify directory was created successfully
+            struct stat st;
+            if (stat(outputDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+                std::string errorMsg = "Directory creation succeeded but verification failed: " + outputDir;
+                if (_logger) _logger->error("Frame {}: {}", frame, errorMsg);
+                returnPlaceholder(args, frame);
+                return;
+            }
+
+            if (_logger) {
+                _logger->info("Frame {}: Successfully created output directory: {}", frame, outputDir);
+            }
+        } catch (const std::exception& e) {
+            std::string errorMsg = std::string("Failed to create output directory: ") + e.what();
+            if (_logger) _logger->error("Frame {}: {}", frame, errorMsg);
+            returnPlaceholder(args, frame);
+            return;
+        }
+
+        // Fetch source image (fast, in-memory operation)
+        if (!_srcClip || !_srcClip->isConnected()) {
+            if (_logger) _logger->error("Frame {}: Source clip not connected", frame);
+            returnPlaceholder(args, frame);
+            return;
+        }
+
+        auto fetchStart = std::chrono::steady_clock::now();
+        std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+        if (!src.get()) {
+            if (_logger) _logger->error("Frame {}: Failed to fetch source image", frame);
+            returnPlaceholder(args, frame);
+            return;
+        }
+
+        auto fetchDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - fetchStart);
+
+        // Convert OFX image to ImageData (fast, in-memory copy)
+        auto convertStart = std::chrono::steady_clock::now();
+
+        OfxRectI bounds = src->getBounds();
+        int width = bounds.x2 - bounds.x1;
+        int height = bounds.y2 - bounds.y1;
+        int rowBytes = src->getRowBytes();
+        int pixelComponents = src->getPixelComponentCount();
+        OFX::BitDepthEnum bitDepth = src->getPixelDepth();
+
+        int bitDepthInt = 32; // default to float
+        if (bitDepth == OFX::eBitDepthUByte) {
+            bitDepthInt = 8;
+        } else if (bitDepth == OFX::eBitDepthUShort) {
+            bitDepthInt = 16;
+        }
+
+        const void* pixelData = src->getPixelData();
+
+        ImageData imageData = ImageIO::fromOFXBuffer(
+            pixelData,
+            width,
+            height,
+            rowBytes,
+            pixelComponents,
+            bitDepthInt
+        );
+
+        auto convertDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - convertStart);
+
+        // Construct input file path (reuse variables from above)
+        std::string basename = getEffectiveBasename();
+
+        std::ostringstream filename;
+        filename << mountPath << "/in/"
+                 << projectName << "/"
+                 << workflowName << "/"
+                 << version << "/"
+                 << basename << "."
+                 << std::setw(4) << std::setfill('0') << frame << ".exr";
+
+        std::string inputPath = filename.str();
+
+        // Ensure ComfyUI client exists
+        if (!_comfyClient) {
+            if (_logger) _logger->info("Frame {}: Creating ComfyUI client", frame);
+
+            std::string address;
+            _serverAddress->getValue(address);
+            int port = _serverPort->getValue();
+            std::string serverUrl = address + ":" + std::to_string(port);
+            _comfyClient.reset(new Client(serverUrl));
+
+            // Re-initialize job manager with new client
+            _jobManager.reset(new AsyncJobManager(_comfyClient.get(), _logger));
+            _jobManager->setCompletionCallback([this](int completedFrame, bool success) {
+                this->onJobComplete(completedFrame, success);
+            });
+        }
+
+        // Submit job asynchronously (TRULY NON-BLOCKING!)
+        // The slow parts (writing EXR, building workflow, submitting to ComfyUI) happen in background
+        if (_jobManager) {
+            auto submitStart = std::chrono::steady_clock::now();
+
+            _jobManager->submitJobAsync(frame, imageData, inputPath, cachedPath, this);
+
+            auto submitDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - submitStart);
+
+            auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - renderStartTime);
+
+            if (_logger) {
+                _logger->info("Frame {}: submitJobAsync() returned in {} ms (non-blocking!)", frame, submitDuration.count());
+                _logger->info("Frame {}: renderAsync() TOTAL TIME: {} ms", frame, totalDuration.count());
+                _logger->info("  Breakdown: cache={} ms, fetch={} ms, convert={} ms, submitAsync={} ms",
+                             cacheCheckDuration.count(), fetchDuration.count(),
+                             convertDuration.count(), submitDuration.count());
+                _logger->info("  (File write, workflow build, and ComfyUI submission happening in background)");
+            }
+
+            updateJobStatusDisplay();
+        }
+
+    } catch (const std::exception& e) {
+        if (_logger) _logger->error("Frame {}: Failed to submit async job: {}", frame, e.what());
+    }
+
+    // Return placeholder immediately
+    returnPlaceholder(args, frame);  // ✓ NON-BLOCKING
+}
+
+void BasePlugin::returnPlaceholder(const OFX::RenderArguments &args, int frame)
+{
+    // Always use checkerboard pattern (mode 1) - parameter is hidden
+    int placeholderMode = 1;
+    // _placeholderMode->getValue(placeholderMode);  // No longer reading from parameter
+
+    if (_logger) _logger->debug("Frame {}: Returning placeholder (mode: {})", frame, placeholderMode);
+
+    std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
+    if (!dst.get()) {
+        if (_logger) _logger->error("Frame {}: Failed to fetch destination image", frame);
+        return;
+    }
+
+    switch (placeholderMode) {
+        case 0:  // Source passthrough
+            if (_srcClip && _srcClip->isConnected()) {
+                std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+                if (src.get()) {
+                    copyPixelData(src.get(), dst.get());
+                }
+            }
+            break;
+
+        case 1:  // Checkerboard pattern
+            renderCheckerboard(dst.get());
+            break;
+
+        case 2:  // Gray frame
+            renderSolidColor(dst.get(), 0.5, 0.5, 0.5);
+            break;
+
+        case 3:  // Last valid frame
+            {
+                int lastValidFrame = findLastValidFrame(args.time);
+                if (lastValidFrame >= 0) {
+                    std::string lastValidPath = constructExpectedOutputPath(lastValidFrame);
+                    try {
+                        loadCachedResult(args, lastValidPath);
+                        return;
+                    } catch (...) {
+                        // Fall back to passthrough
+                    }
+                }
+
+                // Fallback to source passthrough
+                if (_srcClip && _srcClip->isConnected()) {
+                    std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+                    if (src.get()) {
+                        copyPixelData(src.get(), dst.get());
+                    }
+                }
+            }
+            break;
+
+        default:
+            // Default to passthrough
+            if (_srcClip && _srcClip->isConnected()) {
+                std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
+                if (src.get()) {
+                    copyPixelData(src.get(), dst.get());
+                }
+            }
+            break;
+    }
+}
+
+void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::string& cachedPath)
+{
+    std::unique_ptr<OFX::Image> dst(_dstClip->fetchImage(args.time));
+    if (!dst.get()) {
+        throw std::runtime_error("Failed to fetch destination image");
+    }
+
+    // Get FULL image dimensions from Region of Definition, not just render window
+    // IMPORTANT: getBounds() returns the render window (portion being rendered),
+    // but cached EXR files are always full resolution, so we must compare against RoD
+    OfxRectD rod = _srcClip->getRegionOfDefinition(args.time);
+    int expectedWidth = static_cast<int>(rod.x2 - rod.x1);
+    int expectedHeight = static_cast<int>(rod.y2 - rod.y1);
+
+    if (_logger) {
+        OfxRectI renderWindow = dst->getBounds();
+        _logger->debug("Frame {}: Full image (RoD)={}x{}, Render window=({},{} to {},{})",
+                      static_cast<int>(args.time),
+                      expectedWidth, expectedHeight,
+                      renderWindow.x1, renderWindow.y1,
+                      renderWindow.x2, renderWindow.y2);
+    }
+
+    // Read EXR file
+    ImageData outputImageData = ImageIO::readEXR(cachedPath);
+
+    // CRITICAL: Validate that cached image dimensions match FULL image dimensions
+    // Note: We compare against RoD, not render window
+    if (outputImageData.width != expectedWidth || outputImageData.height != expectedHeight) {
+        std::ostringstream error;
+        error << "Cached image dimensions (" << outputImageData.width << "x" << outputImageData.height
+              << ") do not match expected full image dimensions (" << expectedWidth << "x" << expectedHeight << "). "
+              << "This can happen when:\n"
+              << "  1. Timeline/project resolution changed after cache was created\n"
+              << "  2. Source clip resolution changed\n"
+              << "  3. Render resolution settings changed\n"
+              << "Cache file: " << cachedPath << "\n"
+              << "SOLUTION: The cached file will be invalidated and re-rendered at the correct resolution.";
+
+        if (_logger) {
+            _logger->warn("Frame {}: {}", static_cast<int>(args.time), error.str());
+        }
+
+        throw std::runtime_error(error.str());
+    }
+
+    // Get render window bounds - we may only need to render a portion
+    OfxRectI renderWindow = dst->getBounds();
+    int renderWidth = renderWindow.x2 - renderWindow.x1;
+    int renderHeight = renderWindow.y2 - renderWindow.y1;
+
+    // Check if we're rendering the full image or just a portion
+    bool isFullFrameRender = (renderWindow.x1 == 0 && renderWindow.y1 == 0 &&
+                             renderWidth == expectedWidth && renderHeight == expectedHeight);
+
+    if (_logger) {
+        _logger->debug("Frame {}: Cached image={}x{}, Render request={}x{}, Full frame={}",
+                      static_cast<int>(args.time),
+                      outputImageData.width, outputImageData.height,
+                      renderWidth, renderHeight,
+                      isFullFrameRender);
+    }
+
+    // If rendering a sub-region, extract that portion from the cached image
+    ImageData regionData = outputImageData;
+    if (!isFullFrameRender) {
+        // Extract the render window region from the full cached image
+        regionData.width = renderWidth;
+        regionData.height = renderHeight;
+
+        std::vector<float> extractedPixels;
+        extractedPixels.reserve(renderWidth * renderHeight * outputImageData.channels);
+
+        for (int y = renderWindow.y1; y < renderWindow.y2; ++y) {
+            for (int x = renderWindow.x1; x < renderWindow.x2; ++x) {
+                int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
+                for (int c = 0; c < outputImageData.channels; ++c) {
+                    extractedPixels.push_back(outputImageData.pixels[srcIdx + c]);
+                }
+            }
+        }
+
+        regionData.pixels = std::move(extractedPixels);
+
+        if (_logger) {
+            _logger->debug("Frame {}: Extracted region ({},{}) to ({},{}) from cached image",
+                          static_cast<int>(args.time),
+                          renderWindow.x1, renderWindow.y1,
+                          renderWindow.x2, renderWindow.y2);
+        }
+    }
+
+    // Convert to OFX buffer
+    int dstPixelComponents = dst->getPixelComponentCount();
+    OFX::BitDepthEnum dstBitDepth = dst->getPixelDepth();
+    int dstBitDepthInt = 32;
+    if (dstBitDepth == OFX::eBitDepthUByte) dstBitDepthInt = 8;
+    else if (dstBitDepth == OFX::eBitDepthUShort) dstBitDepthInt = 16;
+
+    ImageIO::toOFXBuffer(regionData, dst->getPixelData(), dst->getRowBytes(),
+                         dstPixelComponents, dstBitDepthInt);
+}
+
+void BasePlugin::onJobComplete(int frame, bool success)
+{
+    if (_logger) {
+        _logger->info("========================================");
+        _logger->info("Job completion callback: Frame {} - {}", frame, success ? "SUCCESS" : "FAILED");
+        _logger->info("========================================");
+    }
+
+    if (!success) {
+        if (_jobManager) {
+            std::string error = _jobManager->getJobError(frame);
+            if (_logger) _logger->error("Frame {} error: {}", frame, error);
+        }
+        return;
+    }
+
+    // SUCCESS - Add output file to in-memory cache for fast future lookups
+    std::string cachedPath = constructExpectedOutputPath(frame);
+    {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        _cacheFileExists.insert(cachedPath);
+        if (_logger) {
+            _logger->info("Frame {}: Added to in-memory cache: {}", frame, cachedPath);
+        }
+    }
+
+    // SUCCESS - Invalidate host cache to trigger re-render
+    // Strategy: Modify hidden refresh trigger parameter
+    try {
+        double currentValue = 0.0;
+        _refreshTrigger->getValueAtTime(frame, currentValue);
+        _refreshTrigger->setValueAtTime(frame, currentValue + 0.001);
+
+        if (_logger) {
+            _logger->info("Frame {}: Cache invalidation triggered (refresh: {} -> {})",
+                         frame, currentValue, currentValue + 0.001);
+        }
+    } catch (const std::exception& e) {
+        if (_logger) {
+            _logger->error("Frame {}: Failed to invalidate cache: {}", frame, e.what());
+        }
+    }
+
+    // Update job status display
+    updateJobStatusDisplay();
+}
+
+void BasePlugin::updateJobStatusDisplay()
+{
+    if (!_jobManager || !_jobStatus) return;
+
+    try {
+        int pendingCount = _jobManager->getPendingJobCount();
+        std::vector<int> pendingFrames = _jobManager->getPendingFrames();
+        std::vector<int> failedFrames = _jobManager->getFailedFrames();
+
+        std::string statusText;
+
+        // Show failed frames first (most important)
+        if (!failedFrames.empty()) {
+            statusText = "FAILED frames: ";
+            for (size_t i = 0; i < std::min(failedFrames.size(), size_t(5)); ++i) {
+                if (i > 0) statusText += ", ";
+                statusText += std::to_string(failedFrames[i]);
+            }
+            if (failedFrames.size() > 5) {
+                statusText += " (+" + std::to_string(failedFrames.size() - 5) + " more)";
+            }
+            statusText += " | ";
+        }
+
+        // Then show pending frames
+        if (pendingCount == 0) {
+            if (failedFrames.empty()) {
+                statusText = "No jobs pending";
+            } else {
+                statusText += "No jobs pending";
+            }
+        } else if (pendingCount <= 5) {
+            statusText += "Pending: ";
+            for (size_t i = 0; i < pendingFrames.size(); ++i) {
+                if (i > 0) statusText += ", ";
+                statusText += std::to_string(pendingFrames[i]);
+            }
+        } else {
+            statusText += std::to_string(pendingCount) + " frames pending";
+        }
+
+        _jobStatus->setValue(statusText);
+
+    } catch (const std::exception& e) {
+        if (_logger) _logger->error("Failed to update job status display: {}", e.what());
+    }
+}
+
+void BasePlugin::renderCheckerboard(OFX::Image* dst)
+{
+    if (!dst) return;
+
+    OfxRectI bounds = dst->getBounds();
+    int width = bounds.x2 - bounds.x1;
+    int height = bounds.y2 - bounds.y1;
+    int rowBytes = dst->getRowBytes();
+    int pixelComponents = dst->getPixelComponentCount();
+    OFX::BitDepthEnum bitDepth = dst->getPixelDepth();
+
+    // Calculate bytes per pixel component
+    int bytesPerComponent = 1;  // default for UByte
+    if (bitDepth == OFX::eBitDepthUShort) {
+        bytesPerComponent = 2;
+    } else if (bitDepth == OFX::eBitDepthFloat) {
+        bytesPerComponent = 4;
+    }
+
+    unsigned char* pixels = static_cast<unsigned char*>(dst->getPixelData());
+
+    // Checkerboard pattern (32x32 squares for better visibility)
+    int squareSize = 32;
+
+    for (int y = 0; y < height; ++y) {
+        unsigned char* row = pixels + y * rowBytes;
+        for (int x = 0; x < width; ++x) {
+            bool dark = ((x / squareSize) + (y / squareSize)) % 2 == 0;
+            float value = dark ? 0.4f : 0.6f;
+
+            unsigned char* pixel = row + x * pixelComponents * bytesPerComponent;
+
+            if (bitDepth == OFX::eBitDepthUByte) {
+                unsigned char byteValue = static_cast<unsigned char>(value * 255);
+                for (int c = 0; c < pixelComponents; ++c) {
+                    pixel[c] = byteValue;
+                }
+            } else if (bitDepth == OFX::eBitDepthUShort) {
+                unsigned short* shortPixel = reinterpret_cast<unsigned short*>(pixel);
+                unsigned short shortValue = static_cast<unsigned short>(value * 65535);
+                for (int c = 0; c < pixelComponents; ++c) {
+                    shortPixel[c] = shortValue;
+                }
+            } else {  // float
+                float* floatPixel = reinterpret_cast<float*>(pixel);
+                for (int c = 0; c < pixelComponents; ++c) {
+                    floatPixel[c] = value;
+                }
+            }
+        }
+    }
+}
+
+void BasePlugin::renderSolidColor(OFX::Image* dst, double r, double g, double b)
+{
+    if (!dst) return;
+
+    OfxRectI bounds = dst->getBounds();
+    int width = bounds.x2 - bounds.x1;
+    int height = bounds.y2 - bounds.y1;
+    int rowBytes = dst->getRowBytes();
+    int pixelComponents = dst->getPixelComponentCount();
+    OFX::BitDepthEnum bitDepth = dst->getPixelDepth();
+
+    // Calculate bytes per pixel component
+    int bytesPerComponent = 1;  // default for UByte
+    if (bitDepth == OFX::eBitDepthUShort) {
+        bytesPerComponent = 2;
+    } else if (bitDepth == OFX::eBitDepthFloat) {
+        bytesPerComponent = 4;
+    }
+
+    unsigned char* pixels = static_cast<unsigned char*>(dst->getPixelData());
+
+    for (int y = 0; y < height; ++y) {
+        unsigned char* row = pixels + y * rowBytes;
+        for (int x = 0; x < width; ++x) {
+            unsigned char* pixel = row + x * pixelComponents * bytesPerComponent;
+
+            if (bitDepth == OFX::eBitDepthUByte) {
+                pixel[0] = static_cast<unsigned char>(r * 255);
+                if (pixelComponents > 1) pixel[1] = static_cast<unsigned char>(g * 255);
+                if (pixelComponents > 2) pixel[2] = static_cast<unsigned char>(b * 255);
+                if (pixelComponents > 3) pixel[3] = 255;  // Alpha = 1.0
+            } else if (bitDepth == OFX::eBitDepthUShort) {
+                unsigned short* shortPixel = reinterpret_cast<unsigned short*>(pixel);
+                shortPixel[0] = static_cast<unsigned short>(r * 65535);
+                if (pixelComponents > 1) shortPixel[1] = static_cast<unsigned short>(g * 65535);
+                if (pixelComponents > 2) shortPixel[2] = static_cast<unsigned short>(b * 65535);
+                if (pixelComponents > 3) shortPixel[3] = 65535;
+            } else {  // float
+                float* floatPixel = reinterpret_cast<float*>(pixel);
+                floatPixel[0] = static_cast<float>(r);
+                if (pixelComponents > 1) floatPixel[1] = static_cast<float>(g);
+                if (pixelComponents > 2) floatPixel[2] = static_cast<float>(b);
+                if (pixelComponents > 3) floatPixel[3] = 1.0f;
+            }
+        }
+    }
+}
+
+int BasePlugin::findLastValidFrame(double currentTime)
+{
+    int currentFrame = static_cast<int>(currentTime);
+
+    // Search backwards for the nearest completed frame
+    for (int f = currentFrame - 1; f >= currentFrame - 100 && f >= 0; --f) {
+        std::string path = constructExpectedOutputPath(f);
+        std::ifstream testFile(path);
+        if (testFile.good()) {
+            testFile.close();
+            return f;
+        }
+    }
+
+    return -1;  // No valid frame found
+}
+
+// ============================================================================
+// Parameter Description
+// ============================================================================
+
 void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
                                           OFX::ContextEnum /*context*/,
                                           OFX::PageParamDescriptor *page,
@@ -1382,6 +2548,14 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     version->setParent(*projectGroup);
     page->addChild(*version);
 
+    OFX::StringParamDescriptor *workflowFile = desc.defineStringParam("workflowFilePath");
+    workflowFile->setLabel("Workflow File");
+    workflowFile->setHint("Path to workflow JSON file. Use 'resources/workflows/filename.json' for bundled workflows, or absolute path for custom workflows. Leave empty to use hardcoded workflow.");
+    workflowFile->setStringType(OFX::eStringTypeFilePath);
+    workflowFile->setDefault("resources/workflows/sam_segmentation.json");
+    workflowFile->setParent(*projectGroup);
+    page->addChild(*workflowFile);
+
     // ==== PROCESSING GROUP ====
     OFX::GroupParamDescriptor *processingGroup = desc.defineGroupParam("processingGroup");
     processingGroup->setLabel("Processing");
@@ -1396,6 +2570,52 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     enableProcessing->setAnimates(false);
     enableProcessing->setParent(*processingGroup);
     page->addChild(*enableProcessing);
+
+    // Async rendering mode (hidden - always non-blocking)
+    OFX::ChoiceParamDescriptor *asyncMode = desc.defineChoiceParam("asyncMode");
+    asyncMode->setLabel("Rendering Mode");
+    asyncMode->setHint("Blocking: Traditional behavior (UI freezes, waits for result). "
+                       "Non-Blocking: Progressive rendering (returns placeholder immediately, updates when ready)");
+    asyncMode->appendOption("Blocking (Wait for Result)");
+    asyncMode->appendOption("Non-Blocking (Progressive)");
+    asyncMode->setDefault(1);  // Non-blocking by default for better UX
+    asyncMode->setAnimates(false);
+    asyncMode->setIsSecret(true);  // Hidden from UI
+    asyncMode->setParent(*processingGroup);
+    // page->addChild(*asyncMode);  // Removed from UI
+
+    // Placeholder display mode (hidden - always checkerboard)
+    OFX::ChoiceParamDescriptor *placeholderMode = desc.defineChoiceParam("placeholderMode");
+    placeholderMode->setLabel("Placeholder Display");
+    placeholderMode->setHint("What to show while ComfyUI is processing in non-blocking mode");
+    placeholderMode->appendOption("Source Passthrough");
+    placeholderMode->appendOption("Checkerboard Pattern");
+    placeholderMode->appendOption("Gray Frame");
+    placeholderMode->appendOption("Last Valid Result");
+    placeholderMode->setDefault(1);  // Checkerboard pattern
+    placeholderMode->setAnimates(false);
+    placeholderMode->setIsSecret(true);  // Hidden from UI
+    placeholderMode->setParent(*processingGroup);
+    // page->addChild(*placeholderMode);  // Removed from UI
+
+    // Job status display (read-only)
+    OFX::StringParamDescriptor *jobStatus = desc.defineStringParam("jobStatus");
+    jobStatus->setLabel("Job Status");
+    jobStatus->setHint("Current async job queue status");
+    jobStatus->setStringType(OFX::eStringTypeLabel);  // Read-only label
+    jobStatus->setDefault("No jobs pending");
+    jobStatus->setEnabled(false);  // Read-only
+    jobStatus->setParent(*processingGroup);
+    page->addChild(*jobStatus);
+
+    // Hidden refresh trigger for cache invalidation
+    OFX::DoubleParamDescriptor *refreshTrigger = desc.defineDoubleParam("refreshTrigger");
+    refreshTrigger->setLabel("Refresh Trigger");
+    refreshTrigger->setIsSecret(true);  // Hidden from UI
+    refreshTrigger->setAnimates(true);  // Can be keyframed per-frame
+    refreshTrigger->setDefault(0.0);
+    refreshTrigger->setParent(*processingGroup);
+    page->addChild(*refreshTrigger);
 
     OFX::BooleanParamDescriptor *enableCache = desc.defineBooleanParam("enableCache");
     enableCache->setLabel("Enable Cache");

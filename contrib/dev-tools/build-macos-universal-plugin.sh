@@ -17,21 +17,42 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Global variables
+PLUGIN_NAME="SAMSegmentation"
+TARGET_NAME="SAMSegmentation"
+CLEAN_BUILD=false
+INSTALL_PLUGIN=false
+INSTALL_DIR=""
+ARM64_DIR="build/arm64"
+X86_64_DIR="build/x86_64"
+RELEASE_DIR="build/Release"
+ARM64_BINARY=""
+X86_64_BINARY=""
+UNIVERSAL_BINARY=""
+
+# ============================================================================
+# Logging Functions
+# ============================================================================
+
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
 }
 
 log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
 
 show_usage() {
     cat << EOF
@@ -64,214 +85,247 @@ Note: This script builds each architecture separately and combines them.
 EOF
 }
 
-# Default values
-PLUGIN_NAME="SAMSegmentation"
-TARGET_NAME="SAMSegmentation"
-CLEAN_BUILD=false
-INSTALL_PLUGIN=false
-INSTALL_DIR=""
+verify_macos() {
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        log_error "This script only works on macOS"
+        exit 1
+    fi
+}
 
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -h|--help)
-            show_usage
-            exit 0
-            ;;
-        -p|--plugin)
-            PLUGIN_NAME="$2"
-            shift 2
-            ;;
-        -t|--target)
-            TARGET_NAME="$2"
-            shift 2
-            ;;
-        -c|--clean)
-            CLEAN_BUILD=true
-            shift
-            ;;
-        -i|--install)
-            INSTALL_PLUGIN=true
-            shift
-            ;;
-        --install-dir)
-            INSTALL_DIR="$2"
-            INSTALL_PLUGIN=true
-            shift 2
-            ;;
-        *)
-            log_error "Unknown option: $1"
-            show_usage
-            exit 1
-            ;;
-    esac
-done
+get_openfx_root() {
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    OFX_ROOT="$(cd "$script_dir/../.." && pwd)"
+    cd "$OFX_ROOT"
+}
 
-# Set default install directory if not specified
-if [[ "$INSTALL_PLUGIN" == true && -z "$INSTALL_DIR" ]]; then
-    INSTALL_DIR="$HOME/Library/OFX/Plugins"
-fi
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            -p|--plugin)
+                PLUGIN_NAME="$2"
+                shift 2
+                ;;
+            -t|--target)
+                TARGET_NAME="$2"
+                shift 2
+                ;;
+            -c|--clean)
+                CLEAN_BUILD=true
+                shift
+                ;;
+            -i|--install)
+                INSTALL_PLUGIN=true
+                shift
+                ;;
+            --install-dir)
+                INSTALL_DIR="$2"
+                INSTALL_PLUGIN=true
+                shift 2
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
 
-# Verify we're on macOS
-if [[ "$OSTYPE" != "darwin"* ]]; then
-    log_error "This script only works on macOS"
-    exit 1
-fi
+    # Set default install directory if not specified
+    if [[ "$INSTALL_PLUGIN" == true && -z "$INSTALL_DIR" ]]; then
+        INSTALL_DIR="$HOME/Library/OFX/Plugins"
+    fi
+}
 
-# Get OpenFX root directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OFX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$OFX_ROOT"
+clean_build_directories() {
+    if [[ "$CLEAN_BUILD" == true ]]; then
+        log_warning "Cleaning build directories..."
+        rm -rf "$ARM64_DIR" "$X86_64_DIR"
+        log_success "Build directories cleaned"
+    fi
+}
 
-log_info "Building universal binary for: $PLUGIN_NAME"
-log_info "OpenFX root: $OFX_ROOT"
+# ============================================================================
+# Build Functions
+# ============================================================================
 
-# Build directories
-ARM64_DIR="build/arm64"
-X86_64_DIR="build/x86_64"
-RELEASE_DIR="build/Release"
+install_conan_dependencies() {
+    local arch=$1
+    local build_dir=$2
+    local arch_name=$3
 
-# Clean if requested
-if [[ "$CLEAN_BUILD" == true ]]; then
-    log_warning "Cleaning build directories..."
-    rm -rf "$ARM64_DIR" "$X86_64_DIR"
-fi
+    log_info "Installing Conan dependencies for $arch_name..."
 
-# Step 1: Build arm64 version
-log_info "Step 1/4: Building arm64 version..."
-mkdir -p "$ARM64_DIR"
-
-log_info "Installing Conan dependencies for arm64..."
-conan install . \
-    -s build_type=Release \
-    -s arch=armv8 \
-    -pr:b=default \
-    --build=missing \
-    -o build_comfyui_plugins=True \
-    -of="$ARM64_DIR"
-
-log_info "Configuring CMake for arm64..."
-# Find the conan_toolchain.cmake file
-ARM64_TOOLCHAIN=$(find "$ARM64_DIR" -name "conan_toolchain.cmake" | head -1)
-cmake -S . -B "$ARM64_DIR" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 \
-    -DBUILD_COMFYUI_PLUGINS=ON \
-    -DCMAKE_TOOLCHAIN_FILE="$ARM64_TOOLCHAIN" \
-    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
-
-log_info "Building $TARGET_NAME for arm64..."
-cmake --build "$ARM64_DIR" --config Release --target "$TARGET_NAME" --parallel
-
-# Step 2: Build x86_64 version
-log_info "Step 2/4: Building x86_64 version..."
-mkdir -p "$X86_64_DIR"
-
-log_info "Installing Conan dependencies for x86_64..."
-if ! conan install . \
-    -s build_type=Release \
-    -s arch=x86_64 \
-    -pr:b=default \
-    --build=missing \
-    -o build_comfyui_plugins=True \
-    -of="$X86_64_DIR" 2>&1; then
-    log_error "Failed to install x86_64 dependencies via Conan"
-    log_warning "This likely means Conan packages don't have x86_64 prebuilt binaries"
-    log_warning "Attempting to build from source (this may take a while)..."
-
-    conan install . \
+    if ! conan install . \
         -s build_type=Release \
-        -s arch=x86_64 \
+        -s arch="$arch" \
         -pr:b=default \
-        --build="*" \
-        -o build_comfyui_plugins=True \
-        -of="$X86_64_DIR"
-fi
+        --build=missing \
+        -o "&:build_comfyui_plugins=True" \
+        -of="$build_dir" 2>&1; then
 
-log_info "Configuring CMake for x86_64..."
-# Find the conan_toolchain.cmake file
-X86_64_TOOLCHAIN=$(find "$X86_64_DIR" -name "conan_toolchain.cmake" | head -1)
-cmake -S . -B "$X86_64_DIR" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 \
-    -DBUILD_COMFYUI_PLUGINS=ON \
-    -DCMAKE_TOOLCHAIN_FILE="$X86_64_TOOLCHAIN" \
-    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
+        log_error "Failed to install $arch_name dependencies via Conan"
+        log_warning "This likely means Conan packages don't have $arch_name prebuilt binaries"
+        log_warning "Attempting to build from source (this may take a while)..."
 
-log_info "Building $TARGET_NAME for x86_64..."
-cmake --build "$X86_64_DIR" --config Release --target "$TARGET_NAME" --parallel
+        conan install . \
+            -s build_type=Release \
+            -s arch="$arch" \
+            -pr:b=default \
+            --build="*" \
+            -o "&:build_comfyui_plugins=True" \
+            -of="$build_dir"
+    fi
+}
 
-# Step 3: Find the binaries
-log_info "Step 3/4: Locating plugin binaries..."
+configure_cmake() {
+    local arch=$1
+    local build_dir=$2
+    local arch_name=$3
 
-# Find arm64 binary
-ARM64_BINARY=$(find "$ARM64_DIR" -name "${PLUGIN_NAME}.ofx" -type f | head -1)
-if [[ -z "$ARM64_BINARY" ]]; then
-    log_error "Could not find arm64 binary for $PLUGIN_NAME"
-    exit 1
-fi
-log_success "Found arm64 binary: $ARM64_BINARY"
+    log_info "Configuring CMake for $arch_name..."
 
-# Find x86_64 binary
-X86_64_BINARY=$(find "$X86_64_DIR" -name "${PLUGIN_NAME}.ofx" -type f | head -1)
-if [[ -z "$X86_64_BINARY" ]]; then
-    log_error "Could not find x86_64 binary for $PLUGIN_NAME"
-    exit 1
-fi
-log_success "Found x86_64 binary: $X86_64_BINARY"
+    local toolchain=$(find "$build_dir" -name "conan_toolchain.cmake" | head -1)
 
-# Verify architectures
-log_info "Verifying binary architectures..."
-ARM64_INFO=$(lipo -info "$ARM64_BINARY")
-X86_64_INFO=$(lipo -info "$X86_64_BINARY")
+    cmake -S . -B "$build_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_OSX_ARCHITECTURES="$arch" \
+        -DBUILD_COMFYUI_PLUGINS=ON \
+        -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
+}
 
-if ! echo "$ARM64_INFO" | grep -q "architecture: arm64"; then
-    log_error "arm64 binary is not actually arm64!"
-    echo "$ARM64_INFO"
-    exit 1
-fi
+build_target() {
+    local build_dir=$1
+    local arch_name=$2
 
-if ! echo "$X86_64_INFO" | grep -q "architecture: x86_64"; then
-    log_error "x86_64 binary is not actually x86_64!"
-    echo "$X86_64_INFO"
-    exit 1
-fi
+    log_info "Building $TARGET_NAME for $arch_name..."
+    cmake --build "$build_dir" --config Release --target "$TARGET_NAME" --parallel
+}
 
-log_success "Both binaries verified"
+build_architecture() {
+    local arch=$1
+    local build_dir=$2
+    local arch_name=$3
 
-# Step 4: Combine into universal binary
-log_info "Step 4/4: Creating universal binary..."
+    log_info "Step: Building $arch_name version..."
+    mkdir -p "$build_dir"
 
-# Create output bundle structure
-BUNDLE_DIR="$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/MacOS"
-mkdir -p "$BUNDLE_DIR"
+    install_conan_dependencies "$arch" "$build_dir" "$arch_name"
+    configure_cmake "$arch" "$build_dir" "$arch_name"
+    build_target "$build_dir" "$arch_name"
 
-UNIVERSAL_BINARY="$BUNDLE_DIR/${PLUGIN_NAME}.ofx"
+    log_success "$arch_name build completed"
+}
 
-# Use lipo to create universal binary
-lipo -create \
-    "$ARM64_BINARY" \
-    "$X86_64_BINARY" \
-    -output "$UNIVERSAL_BINARY"
+# ============================================================================
+# Binary Management Functions
+# ============================================================================
 
-log_success "Universal binary created: $UNIVERSAL_BINARY"
+find_binary() {
+    local build_dir=$1
+    local arch_name=$2
 
-# Verify universal binary
-log_info "Verifying universal binary..."
-lipo -info "$UNIVERSAL_BINARY"
+    local binary=$(find "$build_dir" -name "${PLUGIN_NAME}.ofx" -type f | head -1)
 
-# Copy Info.plist from arm64 build
-ARM64_BUNDLE_DIR=$(dirname "$(dirname "$ARM64_BINARY")")
-if [[ -f "$ARM64_BUNDLE_DIR/Info.plist" ]]; then
-    cp "$ARM64_BUNDLE_DIR/Info.plist" "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/"
-    log_success "Copied Info.plist"
-fi
+    if [[ -z "$binary" ]]; then
+        log_error "Could not find $arch_name binary for $PLUGIN_NAME"
+        exit 1
+    fi
 
-# Step 5: Install if requested
-if [[ "$INSTALL_PLUGIN" == true ]]; then
-    log_info "Step 5/5: Installing plugin to $INSTALL_DIR..."
+    log_success "Found $arch_name binary: $binary"
+    echo "$binary"
+}
+
+verify_architecture() {
+    local binary=$1
+    local expected_arch=$2
+    local arch_name=$3
+
+    local arch_info=$(lipo -info "$binary")
+
+    if ! echo "$arch_info" | grep -q "architecture: $expected_arch"; then
+        log_error "$arch_name binary is not actually $expected_arch!"
+        echo "$arch_info"
+        exit 1
+    fi
+}
+
+locate_binaries() {
+    log_info "Step: Locating plugin binaries..."
+
+    ARM64_BINARY=$(find_binary "$ARM64_DIR" "arm64")
+    X86_64_BINARY=$(find_binary "$X86_64_DIR" "x86_64")
+
+    log_success "Both binaries located"
+}
+
+verify_binaries() {
+    log_info "Verifying binary architectures..."
+
+    verify_architecture "$ARM64_BINARY" "arm64" "arm64"
+    verify_architecture "$X86_64_BINARY" "x86_64" "x86_64"
+
+    log_success "Both binaries verified"
+}
+
+# ============================================================================
+# Bundle Creation Functions
+# ============================================================================
+
+create_universal_binary() {
+    log_info "Step: Creating universal binary..."
+
+    # Create output bundle structure
+    local bundle_dir="$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/MacOS"
+    mkdir -p "$bundle_dir"
+
+    UNIVERSAL_BINARY="$bundle_dir/${PLUGIN_NAME}.ofx"
+
+    # Use lipo to create universal binary
+    lipo -create \
+        "$ARM64_BINARY" \
+        "$X86_64_BINARY" \
+        -output "$UNIVERSAL_BINARY"
+
+    log_success "Universal binary created: $UNIVERSAL_BINARY"
+}
+
+verify_universal_binary() {
+    log_info "Verifying universal binary..."
+    lipo -info "$UNIVERSAL_BINARY"
+    log_success "Universal binary verified"
+}
+
+copy_bundle_resources() {
+    local arm64_bundle_dir=$(dirname "$(dirname "$ARM64_BINARY")")
+
+    # Copy Info.plist
+    if [[ -f "$arm64_bundle_dir/Info.plist" ]]; then
+        cp "$arm64_bundle_dir/Info.plist" "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/"
+        log_success "Copied Info.plist"
+    fi
+
+    # Copy Resources directory if it exists (important for ComfyUI plugins)
+    if [[ -d "$arm64_bundle_dir/Resources" ]]; then
+        cp -r "$arm64_bundle_dir/Resources" "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/"
+        log_success "Copied Resources directory"
+    fi
+}
+
+# ============================================================================
+# Installation Functions
+# ============================================================================
+
+install_plugin() {
+    if [[ "$INSTALL_PLUGIN" != true ]]; then
+        return
+    fi
+
+    log_info "Step: Installing plugin to $INSTALL_DIR..."
 
     mkdir -p "$INSTALL_DIR"
 
@@ -285,19 +339,61 @@ if [[ "$INSTALL_PLUGIN" == true ]]; then
     cp -r "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle" "$INSTALL_DIR/"
 
     log_success "Plugin installed to: $INSTALL_DIR/${PLUGIN_NAME}.ofx.bundle"
-fi
+}
 
-# Installation info
-log_success "Build complete!"
-echo
-log_info "Universal plugin bundle: $RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle"
+# ============================================================================
+# Summary Functions
+# ============================================================================
 
-if [[ "$INSTALL_PLUGIN" == false ]]; then
-    log_info "To install for Flame/host apps:"
-    log_info "  cp -r \"$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle\" \"$HOME/Library/OFX/Plugins/\""
-    log_info "Or run: $0 --install"
-fi
+print_summary() {
+    log_success "Build complete!"
+    echo
+    log_info "Universal plugin bundle: $RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle"
 
-echo
-log_info "Binary architectures:"
-lipo -detailed_info "$UNIVERSAL_BINARY"
+    if [[ "$INSTALL_PLUGIN" == false ]]; then
+        log_info "To install for Flame/host apps:"
+        log_info "  cp -r \"$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle\" \"$HOME/Library/OFX/Plugins/\""
+        log_info "Or run: $0 --install"
+    fi
+
+    echo
+    log_info "Binary architectures:"
+    lipo -detailed_info "$UNIVERSAL_BINARY"
+}
+
+# ============================================================================
+# Main Function
+# ============================================================================
+
+main() {
+    parse_arguments "$@"
+    verify_macos
+    get_openfx_root
+
+    log_info "Building universal binary for: $PLUGIN_NAME"
+    log_info "OpenFX root: $OFX_ROOT"
+
+    clean_build_directories
+
+    # Build both architectures
+    build_architecture "armv8" "$ARM64_DIR" "arm64"
+    build_architecture "x86_64" "$X86_64_DIR" "x86_64"
+
+    # Locate and verify binaries
+    locate_binaries
+    verify_binaries
+
+    # Create universal binary
+    create_universal_binary
+    verify_universal_binary
+    copy_bundle_resources
+
+    # Install if requested
+    install_plugin
+
+    # Print summary
+    print_summary
+}
+
+# Run main function
+main "$@"

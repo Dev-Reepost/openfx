@@ -107,7 +107,7 @@ target_link_libraries(test_sam_integration PRIVATE
     OfxSupport
     nlohmann_json::nlohmann_json
     httplib::httplib
-    websocketpp::websocketpp
+    ixwebsocket::ixwebsocket
     OpenSSL::SSL
     OpenSSL::Crypto
     tinyexr::tinyexr

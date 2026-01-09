@@ -1,0 +1,57 @@
+{
+  "4": {
+    "inputs": {
+      "filepath": "Front",
+      "linear_to_sRGB": false,
+      "image_load_cap": 10,
+      "skip_first_images": 120,
+      "select_every_nth": 1
+    },
+    "class_type": "LoadEXR",
+    "_meta": {
+      "title": "Load EXR"
+    }
+  },
+  "30": {
+    "inputs": {
+      "da_model": [
+        "32",
+        0
+      ],
+      "images": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "DepthAnything_V2",
+    "_meta": {
+      "title": "Depth Anything V2"
+    }
+  },
+  "32": {
+    "inputs": {
+      "model": "depth_anything_v2_vitl_fp32.safetensors"
+    },
+    "class_type": "DownloadAndLoadDepthAnythingV2Model",
+    "_meta": {
+      "title": "DownloadAndLoadDepthAnythingV2Model"
+    }
+  },
+  "34": {
+    "inputs": {
+      "filename_prefix": "Result",
+      "sRGB_to_linear": true,
+      "version": 0,
+      "start_frame": 1,
+      "frame_pad": 4,
+      "images": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "SaveEXR",
+    "_meta": {
+      "title": "Save EXR"
+    }
+  }
+}

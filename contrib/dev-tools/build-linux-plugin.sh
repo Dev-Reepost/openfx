@@ -120,7 +120,7 @@ docker run --rm \
             -s build_type=Release \
             -pr:b=default \
             --build=missing \
-            -o build_comfyui_plugins=True \
+            -o "&:build_comfyui_plugins=True" \
             -of=build/linux
 
         echo '[INFO] Configuring CMake...'

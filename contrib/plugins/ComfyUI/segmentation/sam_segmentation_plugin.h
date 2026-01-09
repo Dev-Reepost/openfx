@@ -57,6 +57,8 @@ private:
     // Helper methods
     std::string getSAMModelName() const;
     std::string getDinoModelName() const;
+    json buildHardcodedWorkflow(int frame, const std::string& inputPath);  // Fallback hardcoded workflow
+    json customizeWorkflowWithParams(const json& baseWorkflow, int frame);  // Add SAM-specific parameters
 };
 
 /**

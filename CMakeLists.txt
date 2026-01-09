@@ -81,12 +81,12 @@ find_package(spdlog REQUIRED)
 
 # ComfyUI plugin dependencies (optional)
 if(BUILD_COMFYUI_PLUGINS)
+  find_package(OpenSSL REQUIRED)
   find_package(nlohmann_json REQUIRED)
   find_package(httplib REQUIRED)
-  find_package(websocketpp REQUIRED)
+  find_package(ixwebsocket REQUIRED)
   find_package(tinyexr REQUIRED)
   find_package(miniz REQUIRED)
-  find_package(OpenSSL REQUIRED)
 endif()
 
 # Macros

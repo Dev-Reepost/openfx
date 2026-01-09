@@ -1,21 +1,21 @@
 # Copyright OpenFX and contributors to the OpenFX project.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# ComfyUI SAM Segmentation Plugin
+# ComfyUI AnyComfy Plugin - Generic workflow executor
 
 # Create the plugin as a MODULE (shared library with .ofx extension)
 if(APPLE)
-    add_library(SAMSegmentation MODULE
-        sam_segmentation_plugin.cpp
+    add_library(AnyComfy MODULE
+        anycomfy_plugin.cpp
     )
 else()
-    add_library(SAMSegmentation SHARED
-        sam_segmentation_plugin.cpp
+    add_library(AnyComfy SHARED
+        anycomfy_plugin.cpp
     )
 endif()
 
 # Set output name and properties
-set_target_properties(SAMSegmentation PROPERTIES
+set_target_properties(AnyComfy PROPERTIES
     SUFFIX ".ofx"
     PREFIX ""
     C_VISIBILITY_PRESET hidden
@@ -27,13 +27,13 @@ set_target_properties(SAMSegmentation PROPERTIES
 # each architecture separately and combines with lipo
 
 # Include directories
-target_include_directories(SAMSegmentation PRIVATE
+target_include_directories(AnyComfy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../common
     ${CMAKE_SOURCE_DIR}/Support/include
 )
 
 # Link libraries
-target_link_libraries(SAMSegmentation PRIVATE
+target_link_libraries(AnyComfy PRIVATE
     ComfyUICommon
     OfxSupport
     nlohmann_json::nlohmann_json
@@ -47,27 +47,27 @@ target_link_libraries(SAMSegmentation PRIVATE
 
 # Link macOS system frameworks required by httplib
 if(APPLE)
-    target_link_libraries(SAMSegmentation PRIVATE "-framework CoreFoundation")
+    target_link_libraries(AnyComfy PRIVATE "-framework CoreFoundation")
 endif()
 
 # For macOS, create .ofx.bundle structure at build time
 if(APPLE)
-    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/SAMSegmentation.ofx.bundle/Contents/MacOS")
-    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/SAMSegmentation.ofx.bundle/Contents/Resources")
+    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/MacOS")
+    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/Resources")
 
     # Configure Info.plist
-    set(PLUGIN_NAME "SAMSegmentation")
-    set(PLUGIN_EXE "SAMSegmentation.ofx")
-    set(BUNDLE_IDENTIFIER "com.comfyui.SAMSegmentation")
+    set(PLUGIN_NAME "AnyComfy")
+    set(PLUGIN_EXE "AnyComfy.ofx")
+    set(BUNDLE_IDENTIFIER "com.comfyui.AnyComfy")
     set(BUNDLE_SIGNATURE "????")
     set(PLUGIN_VERSION "1.0.0")
 
     configure_file(${CMAKE_SOURCE_DIR}/Examples/Info.plist.in
-                   "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/SAMSegmentation.ofx.bundle/Contents/Info.plist")
+                   "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/Info.plist")
 
-    add_custom_command(TARGET SAMSegmentation POST_BUILD
+    add_custom_command(TARGET AnyComfy POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:SAMSegmentation> "${BUNDLE_DIR}/"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AnyComfy> "${BUNDLE_DIR}/"
 
         # Copy resources
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCES_DIR}"
@@ -75,18 +75,18 @@ if(APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
             "${RESOURCES_DIR}"
 
-        COMMENT "Creating SAMSegmentation.ofx.bundle structure with resources"
+        COMMENT "Creating AnyComfy.ofx.bundle structure with resources"
     )
 endif()
 
 # For Linux, create .ofx.bundle structure at build time
 if(UNIX AND NOT APPLE)
-    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/SAMSegmentation.ofx.bundle/Contents/Linux-${CMAKE_SYSTEM_PROCESSOR}")
-    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/SAMSegmentation.ofx.bundle/Resources")
+    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Contents/Linux-${CMAKE_SYSTEM_PROCESSOR}")
+    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Resources")
 
-    add_custom_command(TARGET SAMSegmentation POST_BUILD
+    add_custom_command(TARGET AnyComfy POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:SAMSegmentation> "${BUNDLE_DIR}/"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AnyComfy> "${BUNDLE_DIR}/"
 
         # Copy resources (Linux uses Resources/ at bundle root level)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCES_DIR}"
@@ -94,8 +94,8 @@ if(UNIX AND NOT APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
             "${RESOURCES_DIR}"
 
-        COMMENT "Creating SAMSegmentation.ofx.bundle structure with resources (Linux)"
+        COMMENT "Creating AnyComfy.ofx.bundle structure with resources (Linux)"
     )
 endif()
 
-message(STATUS "ComfyUI SAM Segmentation plugin configured with bundled resources")
+message(STATUS "ComfyUI AnyComfy plugin configured with bundled resources")

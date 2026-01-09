@@ -1,0 +1,437 @@
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,582 | Running DaVinci Resolve Studio v20.2.3.0006 (macOS/Clang arm64)
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,582 | BMD_BUILD_UUID b107e64e-a1d5-4929-acdd-bc2a9fa3e03c
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,582 | BMD_GIT_COMMIT 14afe2c9cac879ba880bb57b3d6987912c4679c4
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,642 | Starting GPUDetect 1.2_9-a4
+0x1f4db6080    | GPUDetect            | ERROR | 2025-12-09 14:30:48,645 | Failed to query IOKit monitor information
+0x1f4db6080    | GPUDetect            | ERROR | 2025-12-09 14:30:48,652 | Failed to query IOKit monitor information
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 | Done in 9 ms.
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 | Detected System:
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - OS: MacOS 26.1 (Build 25B78)
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - Model: Mac14,13
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - System ID: cf5143a5-547f-5a03-9e0f-ee6a62d42630
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - CPU: Apple M2 Max, 12 threads, arm64
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - RAM: 64.5 GiB used of 96 GiB
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 | Detected 1 GPUs:
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |   - "Apple M2 Max" (gpu:27f6c28a.6b424732) <- Main Display GPU
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |     Integrated, 77.8 GiB VRAM
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 |     Matches: CoreGraphics, Metal, OpenCL
+0x1f4db6080    | GPUDetect            | INFO  | 2025-12-09 14:30:48,652 | Detected 0 monitors:
+0x1f4db6080    | Main.GPUConfig       | INFO  | 2025-12-09 14:30:48,652 | Compute API set to automatic, defaulting to Metal.
+0x1f4db6080    | Main.GPUConfig       | INFO  | 2025-12-09 14:30:48,652 | Selected compute API: Metal
+0x1f4db6080    | Main.GPUConfig       | INFO  | 2025-12-09 14:30:48,652 | Automatic GPU Selection:
+0x1f4db6080    | Main.GPUConfig       | INFO  | 2025-12-09 14:30:48,652 |   - "Apple M2 Max" (gpu:27f6c28a.6b424732)
+0x1f4db6080    | IO                   | INFO  | 2025-12-09 14:30:48,652 | RED InitializeSdk with library path at /Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries
+0x1f4db6080    | IO                   | INFO  | 2025-12-09 14:30:48,663 | R3DAPI 9.1.1-57f6471 (20251008 Ma64S OpenCL-Fix) R3DSDK 9.1.1-57f6471 (20251008 Ma64D CNBN OpenCL-Fix) RED METAL 9.1.2-bfbdfb4 (20251008) [/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/] init is successful
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,663 | Decklink model name: '', version: ''
+0x1f4db6080    | DVIP                 | INFO  | 2025-12-09 14:30:48,663 | DVIP release/20.2.3 build 5 (2911bb7349f9231d95027cde33a677d4ef47b576). Release, version 20.2.3.
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,663 | Using DNxHR library v3.0.0.1312r
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,667 | Cinematic API bridge is loaded.
+0x16dabb000    | Fusion               | INFO  | 2025-12-09 14:30:48,834 | Fusion Build: 45bdfb5a_0006 (Nov  3 2025 15:12:12)
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,835 | Initialized ARRIImageSDK version 9.0.0
+0x16e0bf000    | Fusion               | INFO  | 2025-12-09 14:30:48,835 | fusionsystem: = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/libfusionsystem.dylib"
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,835 | Apple ProRes RAW plugin - Standard v1.3 [com.apple.proresraw.prrplugin.standardrawconversion]
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,835 | Found 1 Apple ProRes RAW plugins.
+0x16db47000    | IO                   | ERROR | 2025-12-09 14:30:48,835 | ProRes RAW SDK raw conversion plug-in loading error(s): unable to open default plug-in directory /Library/Application Support/ProApps/PlugIns/ProResRAW
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:48,835 | IO codec library load completed in 172 ms.
+0x16e0bf000    | Fusion               | INFO  | 2025-12-09 14:30:48,843 | FusionLibs: = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/"
+0x16e0bf000    | Fusion               | INFO  | 2025-12-09 14:30:48,843 | UserData:   = "/Users/reepost/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion"
+0x16e0bf000    | Fusion               | INFO  | 2025-12-09 14:30:48,843 | Profiles:   = "UserData:Profiles/"
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:48,861 | UI language is set to "en".
+Attribute Qt::AA_ShareOpenGLContexts must be set before QCoreApplication is created.
+0x16e51f000    | DbCommon2            | INFO  | 2025-12-09 14:30:48,861 | Loading dblist file: /Users/reepost/Library/Preferences/Blackmagic Design/DaVinci Resolve/dblist.conf
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,886 | Finished loading Application style sheet
+2025-12-09 14:30:48.892 Resolve[38490:8863531] Info: Empty interface object while trying to get MA
+0x16e51f000    | Main                 | INFO  | 2025-12-09 14:30:48,893 | Local SysId:A4FC1430EDC7 Hostname:MacStudio04 Timezone:Europe/Paris UTC+0100
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,902 | Show splash screen
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:48,902 | Show splash screen message: Starting Up
+0x16e51f000    | DbCommon2            | INFO  | 2025-12-09 14:30:48,923 | postgres project library Resolve Database at 192.168.1.13 version 13.4
+0x16e51f000    | DbCommon2            | INFO  | 2025-12-09 14:30:48,929 | Project library [Resolve Database192.168.1.13] current version <18.1.0.004> updated on <2025-02-07T19:32:41.107>, remark: <patched with 18.1.0.004 database upgrade>
+0x16e51f000    | DbCommon2            | INFO  | 2025-12-09 14:30:48,929 | Connect to postgres project library Resolve Database192.168.1.13
+*********** WITH DIRECT I/O SWITCHED ON!
+*********** WITH DIRECT I/O SWITCHED ON!
+*********** WITH DIRECT I/O SWITCHED ON!
+*********** WITH DIRECT I/O SWITCHED ON!
+0x1f4db6080    | IO                   | INFO  | 2025-12-09 14:30:48,936 | Adding directory /Volumes to directory watching list
+0x16ecc7000    | Main                 | INFO  | 2025-12-09 14:30:48,937 | Started listener socket at port 15000
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,068 | Application state changed to Active
+0x1f4db6080    | UI.GLContext         | INFO  | 2025-12-09 14:30:49,145 | Creating shared OpenGL context for this thread (1 total).
+0x1f4db6080    | UI.GLContext         | INFO  | 2025-12-09 14:30:49,205 | Initialized OpenGL 2.1 (requested 2.0) on device 'Apple Apple M2 Max'
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,205 | Show splash screen message: Checking Licenses
+DHID 2147539006
+0x16f23f000    | LeManager            | INFO  | 2025-12-09 14:30:49,279 | 521, 30
+0x1f4db6080    | BtCommon             | INFO  | 2025-12-09 14:30:49,279 | Memory config: reserved=18432M pinned=13824M log=0
+0x1f4db6080    | BtCommon             | INFO  | 2025-12-09 14:30:49,279 | Using default pooled memory manager
+0x16f2cb000    | BtCommon             | INFO  | 2025-12-09 14:30:49,279 | BtResourceManager Process Thread Started
+0x1f4db6080    | SyManager            | INFO  | 2025-12-09 14:30:49,583 | Total: 20, NumDtThreads: 8, NumComms: 0, NumSites: 1
+
+0x1f4db6080    | SyManager            | INFO  | 2025-12-09 14:30:49,583 | Lookaheads -> playback = 20, record = 20, stop = 2
+
+Sy High Command Handler Thread ----- (6162460672)
+SY high priority cmd handler thread starts: 6F4FB000
+Sy Low Command Handler Thread ----- (6163034112)
+SY low priority cmd handler thread starts: 6F587000
+Sy Data Handler Thread ----- (6163607552)
+SY data handler thread starts: 6F613000
+Gs High Command Handler Thread ----- (6164754432)
+GS high priority cmd handler thread starts: 6F72B000
+Gs Low Command Handler Thread ----- (6165327872)
+GS low priority cmd handler thread starts: 6F7B7000
+Dp High Command Handler Thread ----- (6166474752)
+DP high priority cmd handler thread starts: 6F8CF000
+0x16f843000    | GsManager            | INFO  | 2025-12-09 14:30:49,583 | Gs Processor Thread ----- (6165901312)
+
+Dt High Command Handler Thread ----- (6167621632)
+DT high priority cmd handler thhread starts: 6F9E7000
+Dp Low Command Handler Thread ----- (6167048192)
+DP low priority cmd handler thread starts: 6F95B000
+GS processor thread starts: 6F843000
+Dt Low Command Handler Thread ----- (6168195072)
+DT low priority cmd handler thread starts: 6FA73000
+0x1f4db6080    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Using 8 generic IO threads
+0x1f4db6080    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Total of 16 IO threads (including 8 generic and 8 Red decode threads)
+0x16faff000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Data Handler Thread Started
+DT data handler thread starts: 6FAFF000
+0x16fc17000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fca3000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fdbb000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fb8b000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fed3000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16ff5f000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fd2f000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x16fe47000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x17021b000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+0x1702a7000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+0x17044b000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+0x17018f000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+Ls High Command Handler Thread ----- (6179663872)
+0x16ffeb000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+Ls Low Command Handler Thread ----- (6180237312)
+0x170077000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+Ls High Command Handler Thread ----- (6181384192)
+LS low priority cmd handler thread starts: 705EF000
+Ls Data Handler Thread ----- (6182531072)
+Ls Data Handler Thread ----- (6180810752)
+Ls Low Command Handler Thread ----- (6181957632)
+LS low priority cmd handler thread starts: 70793000
+Ls High Command Handler Thread ----- (6183104512)
+Ls Low Command Handler Thread ----- (6183677952)
+LS low priority cmd handler thread starts: 70937000
+LS data handler thread starts: 7067B000
+0x170333000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+Mem Data Transmitter Thread ----- (6184824832)
+LS data handler thread starts: 7081F000
+Mem data transmitter thread starts: 70A4F000
+Ls Data Handler Thread ----- (6184251392)
+0x1703bf000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+0x170103000    | DtManager            | INFO  | 2025-12-09 14:30:49,583 | Dt Worker Thread Started
+0x1704d7000    | DtManager            | INFO  | 2025-12-09 14:30:49,584 | Dt Worker Thread Started
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,584 | Show splash screen message: Loading Project Libraries
+0x1709c3000    | GPU.MultiBoardMgr    | INFO  | 2025-12-09 14:30:49,585 | Let There Be Metal Light!
+0x1709c3000    | GPU.MultiBoardMgr    | INFO  | 2025-12-09 14:30:49,585 | Initializing Metal board manager for Main Display GPU gpu:27f6c28a.6b424732.
+0x170b67000    | GPU.SingleBoardMgr   | INFO  | 2025-12-09 14:30:49,587 | Board manager thread for "Apple M2 Max" (gpu:27f6c28a.6b424732) is ready.
+0x1709c3000    | UI.GLInterop         | INFO  | 2025-12-09 14:30:49,587 | OpenGL interop was initialized.
+0x1709c3000    | UI.GLInterop         | INFO  | 2025-12-09 14:30:49,587 | OpenGL interop was initialized.
+0x1709c3000    | GPU.MultiBoardMgr    | INFO  | 2025-12-09 14:30:49,587 | Enabled Metal pinned memory.
+LS data handler thread starts: 709C3000
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,614 | Show splash screen message: Initializing system components
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,616 | Show splash screen message: Loading video codecs
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:49,618 | Show splash screen message: Loading video plugins
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:49,622 | HW ProRes capability is present (Decoding: enabled)
+0x16db47000    | IO                   | INFO  | 2025-12-09 14:30:49,622 | IO codec initialization completed in 4 ms.
+0x170adb000    | OpenFX               | INFO  | 2025-12-09 14:30:54,075 | OFX: loading com.comfyui.SAMSegmentation
+0x16de8f000    | OpenFX               | INFO  | 2025-12-09 14:30:54,078 | No context is available for com.absoft.NeatVideo5
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:54,078 | Show splash screen message: Loading Fairlight Engine
+0x16f3e3000    | Fusion               | INFO  | 2025-12-09 14:30:54,244 | 371 templates scanned in 0.07 secs
+0x1f4db6080    | Fairlight            | INFO  | 2025-12-09 14:30:54,441 | 00.00.00.360(001): Running Fairlight (4086170b73afec00614b088239dbf4395dacecd0)
+0x1f4db6080    | FairlightLoader      | INFO  | 2025-12-09 14:30:54,441 | Fairlight lib initialized in 360 ms.
+0x16dabb000    | UI.GLContext         | INFO  | 2025-12-09 14:30:54,442 | Creating shared OpenGL context for this thread (2 total).
+0x16dabb000    | UI.GLIO              | INFO  | 2025-12-09 14:30:54,444 | Initialized MainPlayer OpenGL I/O on Metal device 'Apple M2 Max'
+0x1f4db6080    | UI.GLIO              | INFO  | 2025-12-09 14:30:54,444 | MainPlayer: OpenGL I/O setup done.
+0x1738ef000    | UI.GLContext         | INFO  | 2025-12-09 14:30:54,444 | Creating shared OpenGL context for this thread (3 total).
+0x1738ef000    | UI.GLIO              | INFO  | 2025-12-09 14:30:54,445 | Initialized AuxPlayer OpenGL I/O on Metal device 'Apple M2 Max'
+0x1f4db6080    | UI.GLIO              | INFO  | 2025-12-09 14:30:54,445 | AuxPlayer: OpenGL I/O setup done.
+0x17397b000    | UI.GLContext         | INFO  | 2025-12-09 14:30:54,445 | Creating shared OpenGL context for this thread (4 total).
+0x17397b000    | UI.Scopes            | INFO  | 2025-12-09 14:30:54,446 | Initialized GPU Scopes Manager on Metal device 'Apple M2 Max'
+0x1f4db6080    | LeManager            | INFO  | 2025-12-09 14:30:54,447 | R_V:16.0.3.0
+SY panel handler thread starts: 73A07000
+socket: 58
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:54,453 | Show splash screen message: Loading Project Settings
+DaVinci Panel API Version: 1.0
+Resolve discovery
+0x1f4db6080    | UI.MenuBar           | WARN  | 2025-12-09 14:30:54,782 | Main menu action [workspaceLayoutFusion_sub001Default]'s slot is not defined: workspaceLayoutFusion_sub001Default_triggered()
+0x1f4db6080    | UI.MenuBar           | WARN  | 2025-12-09 14:30:54,782 | Main menu action [workspaceWIPlugins_placeholder]'s slot is not defined: workspaceWIPlugins_placeholder_triggered()
+0x1f4db6080    | FusionUtils          | WARN  | 2025-12-09 14:30:54,792 | Fusion DoAction ACTION_SET_FUSION_HOTKEY ignored, init not completed
+0x1f4db6080    | SyManager            | ERROR | 2025-12-09 14:30:54,800 | RemoteStream() - Access token is empty
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:54,997 | Show splash screen message: Loading Media Page
+0x1f4db6080    | UI.FairlightInterface | WARN  | 2025-12-09 14:30:55,167 | SetActionEnabled: Failed to find action [viewTimelineScrollingFixed]'s action connector for handler Id [1]
+Unknown property letter-spacing
+Unknown property letter-spacing
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:55,585 | Show splash screen message: Loading Cut Page
+0x1f4db6080    | UI.SpeedTimeline     | INFO  | 2025-12-09 14:30:55,644 | Replay UI is enabled.
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:55,825 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:55,826 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:55,849 | Show splash screen message: Loading Edit Page
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:56,100 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:56,100 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:56,108 | Show splash screen message: Loading Fusion Page
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:56,198 | Show splash screen message: Loading Fairlight Page
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:56,319 | Show splash screen message: Loading Color Page
+libpng warning: iCCP: known incorrect sRGB profile
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:56,425 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:30:56,425 | OFX - plugin not supported on this platform, is being skipped
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:57,431 | Show splash screen message: Loading Waveform Monitor
+****************** Flushing GPU Buffers
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:57,645 | Show splash screen message: Loading Audio Plugins
+0x1f4db6080    | SyManager            | INFO  | 2025-12-09 14:30:57,772 | Collaboration IP 192.168.1.217 Port 0
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:30:59,678 | Show splash screen message: Loading Projects
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:30:59,775 | Current user pointer is changed
+0x1f4db6080    | UI                   | WARN  | 2025-12-09 14:30:59,864 | Failed to load [13] from Metadata widget.
+Resolve discovery
+0x1f4db6080    | SyManager.Gallery    | INFO  | 2025-12-09 14:31:00,132 | Start purging still caches
+0x1f4db6080    | SyManager.Gallery    | INFO  | 2025-12-09 14:31:00,132 | Finish purging still caches
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:00,160 | Current timeline mode is changed
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:00,183 | Media pool relink status changed to 0
+0x1f4db6080    | FusionUtils          | WARN  | 2025-12-09 14:31:00,189 | Fusion DoAction ACTION_SET_FUSION_HOTKEY ignored, init not completed
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:00,197 | Launching project manager
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:00,197 | Main view page is changed to 12
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:31:00,205 | Show splash screen message: Ready
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:00,221 | Gallery pointer is changed, refreshing color gallery
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:31:00,271 | Close splash screen
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:31:00,271 | Launching main loop
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:00,564 | Fusion templates changed
+0x1f4db6080    | UI                   | WARN  | 2025-12-09 14:31:00,570 | Bin to remove [Titles/Subtitles/Animated] does not exist in the view []
+0x1f4db6080    | UI                   | WARN  | 2025-12-09 14:31:00,570 | Bin to remove [Titles/Subtitles] does not exist in the view []
+0x1f4db6080    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:31:05,058 | Database transaction is ongoing, user initiated action Sync Asset Map is postponed
+0x1f4db6080    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:31:05,059 | Database transaction completed, enqueueing 1 postponed actions
+0x16fc17000    | IO                   | INFO  | 2025-12-09 14:31:05,059 | Imf::GlobalThreadCount set to 12 (detected 12 cores)
+*** Init[264]: Failed to read file "/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/00-IN/01-From_Quad_Edit--FrameIO/GRAB02/REF VFX GRAB 002/JUI_REF VFX_GRAB02_251125.mov"
+*** Create[53]: Init() failed with 2
+*** BMDMacQuickTimeReader[218]: Movie::Create() failed
+0x16fed3000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | Failed to create decoder for /Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/00-IN/01-From_Quad_Edit--FrameIO/GRAB02/REF VFX GRAB 002/JUI_REF VFX_GRAB02_251125.mov
+0x16fed3000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | Failed to open video file </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/00-IN/01-From_Quad_Edit--FrameIO/GRAB02/REF VFX GRAB 002/JUI_REF VFX_GRAB02_251125.mov> for decoding, error: <Codec is not opened yet.>
+0x16fed3000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | IOVideoDecoderFacade can not decode file /Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/00-IN/01-From_Quad_Edit--FrameIO/GRAB02/REF VFX GRAB 002/JUI_REF VFX_GRAB02_251125.mov of type QuickTime
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/127/127_020/01-scans/127_020_scan_v001/127_020_scan_v001.1020.exr) cannot be opened
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/127/127_020/01-scans/127_020_scan_v001/127_020_scan_v001.1020.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/127/127_020/01-scans/127_020_scan_v001/127_020_scan_v001.1020.exr) cannot be opened
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:05,060 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/127/127_020/01-scans/127_020_scan_v001/127_020_scan_v001.1020.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,063 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/097/097_010/03-render/04_comp/v002/EXR_full/097_010_comp_ACEScg_v002.1227.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,063 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/097/097_010/03-render/04_comp/v002/EXR_full/097_010_comp_ACEScg_v002.1227.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,063 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/097/097_010/03-render/04_comp/v002/EXR_full/097_010_comp_ACEScg_v002.1227.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,063 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/097/097_010/03-render/04_comp/v002/EXR_full/097_010_comp_ACEScg_v002.1227.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,065 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/01-scans/140_030_scan_v001/140_030_scan_v001.1100.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,066 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/01-scans/140_030_scan_v001/140_030_scan_v001.1100.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,066 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/01-scans/140_030_scan_v001/140_030_scan_v001.1100.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,066 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/01-scans/140_030_scan_v001/140_030_scan_v001.1100.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:05,069 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/114/114_020/01-scans/114_020_scan_v001/114_020_scan_v001.1099.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:05,069 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/114/114_020/01-scans/114_020_scan_v001/114_020_scan_v001.1099.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:05,069 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/114/114_020/01-scans/114_020_scan_v001/114_020_scan_v001.1099.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:05,069 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/114/114_020/01-scans/114_020_scan_v001/114_020_scan_v001.1099.exr>, error: <File does not exist, or file format is not recognizable.>
+0x170b67000    | GPU.SingleBoardMgr   | INFO  | 2025-12-09 14:31:05,073 | Flushing GPU memory...
+0x170b67000    | UI.GLContext         | INFO  | 2025-12-09 14:31:05,073 | Creating shared OpenGL context for this thread (5 total).
+0x170b67000    | UI.GLTexPool         | INFO  | 2025-12-09 14:31:05,073 | Released 0 MiB in 0 unused textures.
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:31:05,113 | Loading project (Untitled Project 1) from project library (Resolve Database192.168.1.13) took 520 ms
+****************** Flushing GPU Buffers
+0x17139b000    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,116 | Media pool relink status changed to 1
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,234 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x170b67000    | GPU.SingleBoardMgr   | INFO  | 2025-12-09 14:31:05,237 | Flushing GPU memory...
+0x170b67000    | UI.GLTexPool         | INFO  | 2025-12-09 14:31:05,238 | Released 0 MiB in 0 unused textures.
+0x1f4db6080    | SyManager.Gallery    | INFO  | 2025-12-09 14:31:05,238 | Start purging still caches
+0x1f4db6080    | SyManager.Gallery    | INFO  | 2025-12-09 14:31:05,238 | Finish purging still caches
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,258 | Current timeline mode is changed
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,276 | Media pool relink status changed to 1
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,277 | Current project pointer changed to (Untitled Project 1) from DB (Resolve Database : Network)
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,277 | Current timeline pointer (Timeline 1) is changed
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,278 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,278 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,278 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,278 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:05,596 | Lock project 442a4c97-f04a-4d6d-9022-b32df762e798
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:05,597 | The buttonId [7] is not found for [0] in [0]
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:05,599 | Gallery pointer is changed, refreshing color gallery
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,605 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,605 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,605 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fb8b000    | IO                   | ERROR | 2025-12-09 14:31:05,605 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,645 | Main view page is changed to 1
+0x1f4db6080    | UI                   | WARN  | 2025-12-09 14:31:05,645 | Failed to get auto update information.
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,654 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,654 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,654 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:05,654 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,712 | Main view page is changed to 11
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:05,797 | Main view page is changed to 11
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:31:05,811 | Launching main window
+### DEL_DBG IOFileSys::DeleteDirFully - command = rm -rf '/Volumes/ceph_share/002_BACKUP/DaVinciResolve/Resolve Project Backups/8f0a0e6f-7636-4611-93c6-70d2e813a61d'
+### DEL_DBG IOFileSys::DeletePath[1510] p_OSErrCode = 0, p_ErrMsg = 
+0x1f4db6080    | SyManager            | WARN  | 2025-12-09 14:31:05,825 | No reply received from file system, assume successfully deleted folder /Volumes/ceph_share/002_BACKUP/DaVinciResolve/Resolve Project Backups/8f0a0e6f-7636-4611-93c6-70d2e813a61d.
+### DEL_DBG IOFileSys::DeleteDirFully - command = rm -rf '/Users/reepost/Movies/CacheClip/8f0a0e6f-7636-4611-93c6-70d2e813a61d'
+### DEL_DBG IOFileSys::DeletePath[1510] p_OSErrCode = 0, p_ErrMsg = 
+0x1f4db6080    | SyManager            | WARN  | 2025-12-09 14:31:05,835 | No reply received from file system, assume successfully deleted folder /Users/reepost/Movies/CacheClip/8f0a0e6f-7636-4611-93c6-70d2e813a61d.
+### DEL_DBG IOFileSys::DeleteDirFully - command = rm -rf '/Users/reepost/Movies/.gallery/8f0a0e6f-7636-4611-93c6-70d2e813a61d'
+### DEL_DBG IOFileSys::DeletePath[1510] p_OSErrCode = 0, p_ErrMsg = 
+0x1f4db6080    | SyManager            | WARN  | 2025-12-09 14:31:05,846 | No reply received from file system, assume successfully deleted folder /Users/reepost/Movies/.gallery/8f0a0e6f-7636-4611-93c6-70d2e813a61d.
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:06,055 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:06,055 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:06,055 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:06,055 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | UI.GLDispShader      | INFO  | 2025-12-09 14:31:06,088 | Created 1D LUT texture for LUT size 16384
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:06,131 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.0953.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:06,131 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.0953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:06,131 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.953.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:06,131 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:07,621 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:07,621 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:07,621 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fe47000    | IO                   | ERROR | 2025-12-09 14:31:07,621 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:07,697 | Main view page is changed to 2
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:07,741 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:07,741 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:07,741 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr) cannot be opened
+0x16fc17000    | IO                   | ERROR | 2025-12-09 14:31:07,741 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/140/140_030/03-render/04_comp/v004/EXR_proxy/140_030_comp_Rec_709_video_v004.1021.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | UI.GLDispShader      | INFO  | 2025-12-09 14:31:07,774 | Created 1D LUT texture for LUT size 16384
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:10,567 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.0953.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:10,567 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.0953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:10,567 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.953.exr) cannot be opened
+0x16fca3000    | IO                   | ERROR | 2025-12-09 14:31:10,567 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:10,581 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.0953.exr) cannot be opened
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:10,581 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.0953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:10,581 | EXR file (/Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.953.exr) cannot be opened
+0x16fd2f000    | IO                   | ERROR | 2025-12-09 14:31:10,581 | Failed to read frame frame from video frame </Volumes/STG_NAV020/SG_0380_JUI/_REVIEW/SG_0380_REVIEW_20251204_TO_REEPOST/03_VFX/03-Seq/047/047_020/01-scans/047_020_scan_v001/047_020_scan_v001.953.exr>, error: <File does not exist, or file format is not recognizable.>
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:31:13,170 | Current timeline pointer () is changed
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:31:13,259 | Start saving project Untitled Project 1
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:31:13,414 | Saving project took 155 ms
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:31:15,058 | Application state changed to Inactive
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder mx5p gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder dvh3 gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder ai12 gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder xalg gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder xfi8 gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder he22 gets err: -12906
+0x175f6f000    | IO                   | ERROR | 2025-12-09 14:31:35,785 | Create Decoder AVdn gets err: -12906
+0x17139b000    | SyManager.Signals    | INFO  | 2025-12-09 14:31:43,164 | Media pool relink status changed to 0
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:02,888 | Start saving project Untitled Project 1
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:04,152 | Saving project took 1264 ms
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:32:04,211 | Application state changed to Active
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:32:04,302 | Application state changed to Inactive
+0x16f613000    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:32:04,349 | Database transaction is ongoing, user initiated action SmActIOCPSigInvoker is postponed
+0x16f613000    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:32:04,352 | Database transaction is ongoing, user initiated action SmActIOCPSigInvoker is postponed
+0x16f613000    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:32:04,353 | Database transaction is ongoing, user initiated action SmActIOCPSigInvoker is postponed
+0x16f613000    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:32:04,354 | Database transaction is ongoing, user initiated action SmActIOCPSigInvoker is postponed
+0x1f4db6080    | SyManager.ActionExecutor | INFO  | 2025-12-09 14:32:04,770 | Database transaction completed, enqueueing 4 postponed actions
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:06,365 | Start saving project Untitled Project 1
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:06,396 | Saving project took 31 ms
+0x1f4db6080    | Main                 | INFO  | 2025-12-09 14:32:08,419 | Application state changed to Active
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:32:16,755 | Current timeline pointer (Timeline 1) is changed
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:32:16,830 | Current timeline mode is changed
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:17,992 | Start saving project Untitled Project 1
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:18,016 | Saving project took 24 ms
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:21,108 | Start saving project Untitled Project 1
+0x1f4db6080    | SyManager.ProjectManager | INFO  | 2025-12-09 14:32:21,137 | Saving project took 29 ms
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:32:21,166 | Main view page is changed to 3
+Printing Stack Info
+0   Resolve                             0x000000010273b09c _ZN5QHashI7QString15QHashDummyValueE11deleteNode2EPN9QHashData4NodeE + 158224
+1   Resolve                             0x000000010273b478 _ZN5QHashI7QString15QHashDummyValueE11deleteNode2EPN9QHashData4NodeE + 159212
+2   Resolve                             0x0000000103dceea4 _ZN15QtSharedPointer33ExternalRefCountWithCustomDeleterINSt3__14pairI8BtString14BtSharedHandleIN7ListMgt9LmVersionEEEENS_13NormalDeleterEE7deleterEPNS_20ExternalRefCountDataE + 83020
+3   Resolve                             0x0000000104598b60 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEN8VaCommon7ParamIDEEEvRNS3_13basic_ostreamIT_T0_EEPKv + 151888
+4   Resolve                             0x00000001045224e8 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEN7ListMgt12LmTimelineIDEEEvRNS3_13basic_ostreamIT_T0_EEPKv + 233664
+5   Resolve                             0x0000000104bfdd4c _ZN3OFX4Host8Property16PropertyTemplateINS1_12PointerValueEE14getStringValueEi + 327672
+6   Resolve                             0x0000000104bfcd6c _ZN3OFX4Host8Property16PropertyTemplateINS1_12PointerValueEE14getStringValueEi + 323608
+7   Resolve                             0x00000001098cb25c _ZN9QtPrivate11QSlotObjectIM22UiColorOFXInspectorImpFvvENS_4ListIJEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 188128
+8   Resolve                             0x00000001099089a0 _ZN17QtMetaTypePrivate23QMetaTypeFunctionHelperI24OFXPluginSearchPopupDataLb1EE9ConstructEPvPKv + 92300
+9   Resolve                             0x000000010990c18c _ZN17QtMetaTypePrivate23QMetaTypeFunctionHelperI24OFXPluginSearchPopupDataLb1EE9ConstructEPvPKv + 106616
+10  Resolve                             0x000000010990b890 _ZN17QtMetaTypePrivate23QMetaTypeFunctionHelperI24OFXPluginSearchPopupDataLb1EE9ConstructEPvPKv + 104316
+11  Resolve                             0x00000001098ab7bc _ZN9QtPrivate11QSlotObjectIM22UiColorOFXInspectorImpFvvENS_4ListIJEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 58432
+12  Resolve                             0x00000001098ab424 _ZN9QtPrivate11QSlotObjectIM22UiColorOFXInspectorImpFvvENS_4ListIJEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 57512
+13  libQt5Core.5.dylib                  0x000000012cd2a07c _ZN7QObject5eventEP6QEvent + 596
+14  libQt5Widgets.5.dylib               0x000000012b9e4a98 _ZN19QApplicationPrivate13notify_helperEP7QObjectP6QEvent + 292
+15  libQt5Widgets.5.dylib               0x000000012b9e5ee8 _ZN12QApplication6notifyEP7QObjectP6QEvent + 540
+16  Resolve                             0x0000000105f2e970 _ZN9QtPrivate11QSlotObjectIM29UiProxyGeneratorFolderWatcherFvRK7QStringENS_4ListIJS4_EEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 290672
+17  libQt5Core.5.dylib                  0x000000012cd00170 _ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent + 292
+18  libQt5Core.5.dylib                  0x000000012cd01638 _ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData + 1404
+19  libqcocoa.dylib                     0x00000001462569c4 qt_plugin_instance + 183848
+20  libqcocoa.dylib                     0x00000001462571a4 qt_plugin_instance + 185864
+21  CoreFoundation                      0x00000001884889e8 __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__ + 28
+22  CoreFoundation                      0x000000018848897c __CFRunLoopDoSource0 + 172
+23  CoreFoundation                      0x00000001884886e8 __CFRunLoopDoSources0 + 232
+24  CoreFoundation                      0x0000000188487378 __CFRunLoopRun + 820
+25  CoreFoundation                      0x000000018854135c _CFRunLoopRunSpecificWithOptions + 532
+26  Foundation                          0x000000018a6ce890 -[NSRunLoop(NSRunLoop) runMode:beforeDate:] + 212
+27  Foundation                          0x000000018a6cea94 -[NSRunLoop(NSRunLoop) runUntilDate:] + 100
+28  AppKit                              0x000000018c9baaa0 NSCoreDragReceiveMessageProc + 1784
+29  HIServices                          0x000000018fa62584 CallReceiveMessageCollectionWithMessage + 116
+30  HIServices                          0x000000018fa5c284 DoMultipartDropMessage + 96
+31  HIServices                          0x000000018fa5c044 DoDropMessage + 56
+32  HIServices                          0x000000018fa5a8b4 DragInApplication + 952
+33  HIServices                          0x000000018fa63410 CoreDragStartDraggingAsync + 588
+34  AppKit                              0x000000018cf962c4 -[NSCoreDragManager _dragUntilMouseUp:initialEvent:async:] + 1204
+35  AppKit                              0x000000018cf95d98 -[NSCoreDragManager _tryCatchDragUntilMouseUp:initialEvent:async:] + 32
+36  AppKit                              0x000000018cf972a8 -[NSCoreDragManager dragImage:fromWindow:at:offset:event:pasteboard:source:slideBack:asynchronous:] + 1616
+37  AppKit                              0x000000018d5e802c -[NSWindow(NSDrag) dragImage:at:offset:event:pasteboard:source:slideBack:] + 136
+38  libqcocoa.dylib                     0x0000000146266fbc qt_plugin_instance + 250912
+39  libQt5Gui.5.dylib                   0x000000012c556f0c _ZN12QDragManager4dragEP5QDrag + 368
+40  libQt5Gui.5.dylib                   0x000000012c5572b4 _ZN5QDrag4execE6QFlagsIN2Qt10DropActionEES2_ + 112
+41  libBMDDavUI.dylib                   0x0000000123253db8 _ZN8BmdDavUI11UiDragProxy9StartDragEP5QDragRKNS0_8DragArgsE + 788
+42  libBMDDavUI.dylib                   0x00000001232548d4 _ZN8BmdDavUI11UiDragProxy7s_StartEP5QDrag6QFlagsIN2Qt10DropActionEES5_RKNS_8UiPixmapEP7QWidgetRK5QListI12QKeySequenceEb + 356
+43  Resolve                             0x00000001098fe834 _ZN17QtMetaTypePrivate23QMetaTypeFunctionHelperI24OFXPluginSearchPopupDataLb1EE9ConstructEPvPKv + 50976
+44  Resolve                             0x0000000109900f5c _ZN17QtMetaTypePrivate23QMetaTypeFunctionHelperI24OFXPluginSearchPopupDataLb1EE9ConstructEPvPKv + 61000
+45  Resolve                             0x0000000108b1f8ac _ZN9QtPrivate11QSlotObjectIMN5UiBin23UiBinBaseObjectDelegateEFviENS_4ListIJiEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 99736
+46  Resolve                             0x0000000108b1f37c _ZN9QtPrivate11QSlotObjectIMN5UiBin23UiBinBaseObjectDelegateEFviENS_4ListIJiEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 98408
+47  libQt5Widgets.5.dylib               0x000000012bd219a4 _ZN14QGraphicsScene5eventEP6QEvent + 764
+48  Resolve                             0x0000000108b2112c _ZN9QtPrivate11QSlotObjectIMN5UiBin23UiBinBaseObjectDelegateEFviENS_4ListIJiEEEvE4implEiPNS_15QSlotObjectBaseEP7QObjectPPvPb + 106008
+49  libQt5Widgets.5.dylib               0x000000012b9e4a98 _ZN19QApplicationPrivate13notify_helperEP7QObjectP6QEvent + 292
+0x1f4db6080    | BtCommon             | WARN  | 2025-12-09 14:32:26,309 | ListLock not acquired, enabling fix-up lock
+0x1f4db6080    | UI.GLDispShader      | INFO  | 2025-12-09 14:33:10,663 | Flushing all LUT textures.
+****************** Flushing GPU Buffers
+0x170b67000    | GPU.SingleBoardMgr   | INFO  | 2025-12-09 14:33:10,665 | Flushing GPU memory...
+0x170b67000    | UI.GLTexPool         | INFO  | 2025-12-09 14:33:10,680 | Released 327 MiB in 8 unused textures.
+0x1f4db6080    | SyManager.Signals    | INFO  | 2025-12-09 14:33:10,687 | Current setup pointer is changed
+0x1f4db6080    | UI                   | INFO  | 2025-12-09 14:33:10,753 | Initializing FBO of size 1920 x 1080 - 16b (old 0 x 0 - 16b)
+0x1f4db6080    | UI                   | WARN  | 2025-12-09 14:33:43,911 | CC thumbnail buffer: TIME out
+
+
+==========[CRASH DUMP]==========
+#TIME Tue Dec  9 14:33:49 2025 - Uptime 00:03:00 (hh:mm:ss)
+#PROGRAM_NAME DaVinci Resolve Studio v20.2.3.0006 (macOS/Clang arm64)
+#BMD_ARCHITECTURE arm64
+#BMD_BUILD_UUID b107e64e-a1d5-4929-acdd-bc2a9fa3e03c
+#BMD_GIT_COMMIT 14afe2c9cac879ba880bb57b3d6987912c4679c4
+#BMD_UTIL_VERSION 20.2.3.0006
+#OS macOS
+
+0   Resolve                             0x000000010273a3ec _ZN5QHashI7QString15QHashDummyValueE11deleteNode2EPN9QHashData4NodeE + 154976
+1   Resolve                             0x00000001027397b8 _ZN5QHashI7QString15QHashDummyValueE11deleteNode2EPN9QHashData4NodeE + 151852
+2   libsystem_platform.dylib            0x00000001883f3744 _sigtramp + 56
+3   ???                                 0x0000000000000004 0x0 + 4
+4   SAMSegmentation.ofx                 0x0000000169425694 _ZN7ComfyUI10BasePlugin15executeWorkflowERKN3OFX15RenderArgumentsE + 2248
+5   SAMSegmentation.ofx                 0x0000000169424290 _ZN7ComfyUI10BasePlugin6renderERKN3OFX15RenderArgumentsE + 2116
+6   SAMSegmentation.ofx                 0x000000016946f568 _ZN3OFX7PrivateL12renderActionEP20OfxImageEffectStructNS_11PropertySetE + 756
+7   SAMSegmentation.ofx                 0x000000016946d8b4 _ZN3OFX7Private12mainEntryStrEPKcPKvP20OfxPropertySetStructS6_S2_ + 1604
+8   Resolve                             0x0000000104b844bc _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 674368
+9   Resolve                             0x0000000104b85ea8 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 681004
+10  Resolve                             0x0000000104bf8434 _ZN3OFX4Host8Property16PropertyTemplateINS1_12PointerValueEE14getStringValueEi + 304864
+11  Resolve                             0x00000001057140b4 _ZN8VaCommon9ParameterI11FeatureListE14CreateInstanceEv + 1760824
+12  Resolve                             0x0000000105715d70 _ZN8VaCommon9ParameterI11FeatureListE14CreateInstanceEv + 1768180
+13  Resolve                             0x00000001057234e0 _ZN8VaCommon9ParameterI11FeatureListE14CreateInstanceEv + 1823332
+14  Resolve                             0x000000010560ce68 _ZN8VaCommon9ParameterI11FeatureListE14CreateInstanceEv + 682988
+15  Resolve                             0x0000000104b1ea80 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 258052
+16  Resolve                             0x000000010598c488 _ZN8VaCommon9ParameterI11FeatureListE14CreateInstanceEv + 4350476
+17  Resolve                             0x0000000104b6c0a8 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 575020
+18  Resolve                             0x0000000104b6a4d8 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 567900
+19  Resolve                             0x0000000104b698a8 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 564780
+20  Resolve                             0x0000000104b6ffe0 _ZN5boost2io6detail13call_put_lastIcNSt3__111char_traitsIcEEKlEEvRNS3_13basic_ostreamIT_T0_EEPKv + 591204
+21  libsystem_pthread.dylib             0x00000001883e9c08 _pthread_start + 136
+22  libsystem_pthread.dylib             0x00000001883e4ba8 thread_start + 8
+Signal Number = 10
+
+================================
+log4cxx: No appender could be found for logger (UI).
+log4cxx: Please initialize the log4cxx system properly.
+Attribute Qt::AA_ShareOpenGLContexts must be set before QCoreApplication is created.
+UiCss::Parser - Failed to load file  ":/Stylesheet/FairlightWidgets"
