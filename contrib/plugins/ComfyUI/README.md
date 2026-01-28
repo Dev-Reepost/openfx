@@ -14,6 +14,33 @@ This directory contains OFX plugins that connect to a ComfyUI server to perform 
 
 Based on the Flame/Flare PyBox ComfyUI project, these plugins bring the same functionality to **all** OFX-compatible hosts (Flame, Nuke, Resolve, etc.).
 
+## Recent Enhancements (2026-01-21)
+
+### 🎯 JSON Configuration System
+External configuration files for plugin defaults - no recompilation needed!
+- Configure server address, ports, paths via JSON
+- Bundle-based config with graceful fallback to hardcoded defaults
+- Perfect for multi-site deployments and environment-specific settings
+
+📖 **[Configuration Guide →](../../docs/CONFIGURATION_SYSTEM.md)**
+
+### ⚡ Adaptive Polling Optimization
+90% reduction in idle overhead with faster active response!
+- **Fast polling (0.5s)** when jobs are active → 2× faster response
+- **Slow polling (5.0s)** when idle → 80% overhead reduction
+- Automatic state transitions with logging
+
+📖 **[Adaptive Polling Guide →](../../docs/ADAPTIVE_POLLING.md)**
+
+### 🔧 Other Improvements
+- Hidden workflow name parameter for cleaner AnyComfy UI
+- Simplified logging (state-change only, 90% verbosity reduction)
+- Enhanced job status tracking
+
+📖 **[Session 16 Details →](../../docs/progress/SESSION_16_CONFIGURATION_AND_OPTIMIZATION.md)**
+
+---
+
 ## Architecture
 
 ### Directory Structure

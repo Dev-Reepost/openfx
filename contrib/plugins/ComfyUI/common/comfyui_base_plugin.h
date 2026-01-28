@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_set>
+#include <unordered_map>
 
 using json = nlohmann::json;
 
@@ -43,8 +44,8 @@ protected:
     OFX::BooleanParam *_enableProcessing;      // Master enable/disable for ComfyUI processing
     OFX::StringParam *_serverAddress;
     OFX::IntParam *_serverPort;
-    OFX::StringParam *_sharedMountPath;        // Client-side mount (Mac/Linux path)
-    OFX::StringParam *_serverMountPoint;       // Server-side mount (Windows drive letter, e.g., "Z:")
+    OFX::StringParam *_macMountPath;           // macOS client mount path
+    OFX::StringParam *_winMountPath;           // Windows server mount path (UNC, e.g., "\\\\192.168.1.110\\share")
     OFX::StringParam *_projectName;            // Project name for file organization (e.g., "my_commercial")
     OFX::StringParam *_workflowName;           // Workflow subdirectory (e.g., "segmentation")
     OFX::StringParam *_outputVersion;          // Output version (e.g., "v001")
@@ -57,6 +58,7 @@ protected:
     OFX::ChoiceParam *_placeholderMode;        // What to show while processing
     OFX::DoubleParam *_refreshTrigger;         // Hidden parameter for cache invalidation
     OFX::StringParam *_jobStatus;              // Read-only job status display
+    OFX::RGBParam *_jobStatusColor;            // Visual status indicator (color swatch)
 
     // Instance identification
     std::string _instanceName;                 // OFX instance name for auto-basename generation
@@ -68,6 +70,7 @@ protected:
 
     // Cache optimization (avoid slow network file existence checks)
     mutable std::unordered_set<std::string> _cacheFileExists;  // Files known to exist
+    mutable std::unordered_map<int, std::pair<int, int>> _cacheDimensions;  // Frame -> (width, height)
     mutable std::mutex _cacheMutex;                            // Protect cache access
 
     // Logging
@@ -90,6 +93,11 @@ public:
     virtual json buildWorkflow(int frame, const std::string& inputPath) = 0;
     virtual std::vector<std::string> getRequiredModels() = 0;
 
+    // Override in derived classes to control basename generation
+    // Returns true for generic plugins (AnyComfy) where workflow name varies
+    // Returns false for specialized plugins (SAMSegmentation) where workflow is fixed
+    virtual bool includeWorkflowInBasename() const { return false; }
+
 protected:
     // Helper methods - Blocking workflow execution
     void executeWorkflow(const OFX::RenderArguments &args);
@@ -99,6 +107,7 @@ protected:
     std::string parseOutputPath(const json& history, int frame);
     std::string convertPathForComfyUI(const std::string& localPath);
     std::string constructExpectedOutputPath(int frame);
+    std::string constructInputPath(int frame);  // Construct path to input EXR file
     std::string getEffectiveBasename();  // Get basename (auto-generated or manual)
 
     // Workflow file management
@@ -126,7 +135,11 @@ public:
                                          OFX::ContextEnum context,
                                          OFX::PageParamDescriptor *projectPage,
                                          OFX::PageParamDescriptor *processingPage,
-                                         OFX::PageParamDescriptor *serverPage);
+                                         OFX::PageParamDescriptor *serverPage,
+                                         const json* configDefaults = nullptr);
+
+    // Configuration file management (public for factory access)
+    static json loadConfigDefaults();
 };
 
 } // namespace ComfyUI

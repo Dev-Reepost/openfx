@@ -37,6 +37,9 @@ public:
     virtual json buildWorkflow(int frame, const std::string& inputPath) override;
     virtual std::vector<std::string> getRequiredModels() override;
 
+    // AnyComfy includes workflow name in basename since each workflow represents a different effect
+    virtual bool includeWorkflowInBasename() const override { return true; }
+
     // OFX lifecycle
     virtual void changedParam(const OFX::InstanceChangedArgs &args,
                              const std::string &paramName) override;
@@ -48,17 +51,24 @@ public:
 private:
     // AnyComfy-specific parameters
     OFX::PushButtonParam *_createNewWorkflow;  // Button to create template workflow and open browser
-    OFX::StringParam     *_workflowsDirectory; // Directory containing workflow files (relative to shared mount)
+    OFX::PushButtonParam *_openWorkflow;       // Button to open existing workflow in ComfyUI browser
+    OFX::StringParam     *_comfyUIInputDir;    // ComfyUI input directory path (for auto-loading workflows)
+    OFX::StringParam     *_newWorkflowName;    // User-specified name for new workflows (optional)
 
     // Helper methods
-    std::string getWorkflowsPath() const;           // Get full path to workflows directory
-    std::vector<std::string> scanWorkflowFiles();   // List available workflow files
+    std::string getWorkflowsPath() const;           // Get base path to workflows directory
+    std::string getWorkflowPath(const std::string& workflowName) const;  // Get full path to specific workflow file
+    std::vector<std::string> scanWorkflowFiles();   // List available workflows (by subdirectory)
     void createTemplateWorkflow();                  // Create empty workflow with EXR nodes
+    void openExistingWorkflow();                    // Open selected workflow in ComfyUI browser for editing
     void openComfyUIInBrowser(const std::string& workflowPath);  // Open browser with workflow loaded
     std::string generateUniqueWorkflowName();       // Generate unique workflow name from instance
     json injectPathsIntoWorkflow(const json& workflow, int frame, const std::string& inputPath,
                                   const std::string& outputPrefix);  // Smart path injection for non-templated workflows
     std::string deriveWorkflowNameFromFilename(const std::string& filepath);  // Auto-derive workflow name from filename
+    json convertUIFormatToAPI(const json& uiWorkflow);  // Convert UI format (nodes array) to API format (node IDs as keys)
+    json convertAPIFormatToUI(const json& apiWorkflow); // Convert API format to UI format (for editing in ComfyUI)
+    bool isUIFormat(const json& workflow);  // Check if workflow is in UI format vs API format
 };
 
 /**

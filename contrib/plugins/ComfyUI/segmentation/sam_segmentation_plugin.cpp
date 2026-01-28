@@ -183,7 +183,7 @@ json SAMSegmentationPlugin::buildHardcodedWorkflow(int frame, const std::string&
 
     // Get shared storage path components for output
     std::string mountPath, project, workflow_name, version;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _projectName->getValue(project);
     _workflowName->getValue(workflow_name);
     _outputVersion->getValue(version);
@@ -610,6 +610,11 @@ void SAMSegmentationPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
 
     // Add common parameters (all to same page with groups)
     BasePlugin::describeCommonParameters(desc, context, page, page, page);
+
+    // Override workflowName default for this specialized plugin
+    // SAMSegmentation uses "segmentation" as the effect subdirectory
+    OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
+    workflow->setDefault("segmentation");
 }
 
 // ============================================================================

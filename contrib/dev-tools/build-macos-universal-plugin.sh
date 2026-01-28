@@ -229,10 +229,10 @@ find_binary() {
     local build_dir=$1
     local arch_name=$2
 
-    local binary=$(find "$build_dir" -name "${PLUGIN_NAME}.ofx" -type f | head -1)
+    local binary=$(find "$build_dir" -name "${TARGET_NAME}.ofx" -type f | head -1)
 
     if [[ -z "$binary" ]]; then
-        log_error "Could not find $arch_name binary for $PLUGIN_NAME"
+        log_error "Could not find $arch_name binary for $TARGET_NAME"
         exit 1
     fi
 
@@ -280,10 +280,10 @@ create_universal_binary() {
     log_info "Step: Creating universal binary..."
 
     # Create output bundle structure
-    local bundle_dir="$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/MacOS"
+    local bundle_dir="$RELEASE_DIR/${TARGET_NAME}.ofx.bundle/Contents/MacOS"
     mkdir -p "$bundle_dir"
 
-    UNIVERSAL_BINARY="$bundle_dir/${PLUGIN_NAME}.ofx"
+    UNIVERSAL_BINARY="$bundle_dir/${TARGET_NAME}.ofx"
 
     # Use lipo to create universal binary
     lipo -create \
@@ -305,13 +305,13 @@ copy_bundle_resources() {
 
     # Copy Info.plist
     if [[ -f "$arm64_bundle_dir/Info.plist" ]]; then
-        cp "$arm64_bundle_dir/Info.plist" "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/"
+        cp "$arm64_bundle_dir/Info.plist" "$RELEASE_DIR/${TARGET_NAME}.ofx.bundle/Contents/"
         log_success "Copied Info.plist"
     fi
 
     # Copy Resources directory if it exists (important for ComfyUI plugins)
     if [[ -d "$arm64_bundle_dir/Resources" ]]; then
-        cp -r "$arm64_bundle_dir/Resources" "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle/Contents/"
+        cp -r "$arm64_bundle_dir/Resources" "$RELEASE_DIR/${TARGET_NAME}.ofx.bundle/Contents/"
         log_success "Copied Resources directory"
     fi
 }
@@ -330,15 +330,15 @@ install_plugin() {
     mkdir -p "$INSTALL_DIR"
 
     # Remove existing plugin if present
-    if [[ -d "$INSTALL_DIR/${PLUGIN_NAME}.ofx.bundle" ]]; then
-        log_warning "Removing existing plugin at $INSTALL_DIR/${PLUGIN_NAME}.ofx.bundle"
-        rm -rf "$INSTALL_DIR/${PLUGIN_NAME}.ofx.bundle"
+    if [[ -d "$INSTALL_DIR/${TARGET_NAME}.ofx.bundle" ]]; then
+        log_warning "Removing existing plugin at $INSTALL_DIR/${TARGET_NAME}.ofx.bundle"
+        rm -rf "$INSTALL_DIR/${TARGET_NAME}.ofx.bundle"
     fi
 
     # Copy the bundle
-    cp -r "$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle" "$INSTALL_DIR/"
+    cp -r "$RELEASE_DIR/${TARGET_NAME}.ofx.bundle" "$INSTALL_DIR/"
 
-    log_success "Plugin installed to: $INSTALL_DIR/${PLUGIN_NAME}.ofx.bundle"
+    log_success "Plugin installed to: $INSTALL_DIR/${TARGET_NAME}.ofx.bundle"
 }
 
 # ============================================================================
@@ -348,11 +348,11 @@ install_plugin() {
 print_summary() {
     log_success "Build complete!"
     echo
-    log_info "Universal plugin bundle: $RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle"
+    log_info "Universal plugin bundle: $RELEASE_DIR/${TARGET_NAME}.ofx.bundle"
 
     if [[ "$INSTALL_PLUGIN" == false ]]; then
         log_info "To install for Flame/host apps:"
-        log_info "  cp -r \"$RELEASE_DIR/${PLUGIN_NAME}.ofx.bundle\" \"$HOME/Library/OFX/Plugins/\""
+        log_info "  cp -r \"$RELEASE_DIR/${TARGET_NAME}.ofx.bundle\" \"$HOME/Library/OFX/Plugins/\""
         log_info "Or run: $0 --install"
     fi
 

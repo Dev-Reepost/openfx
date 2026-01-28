@@ -111,26 +111,31 @@ The plugin automatically replaces these variables in your workflow:
 2. **Configure server settings** in the "Server" page
    - Server Address: ComfyUI server IP/hostname
    - Server Port: ComfyUI port (default: 8188)
-   - Shared Mount Path: Path to shared storage
-3. **Click "New Workflow" button** in the "Workflow" page
-   - Creates a template workflow with LoadEXR/SaveEXR nodes
-   - Saves to `${SHARED_MOUNT}/workflows/anycomfy_<instance>_<timestamp>.json`
+   - ComfyUI Input Directory: Path to ComfyUI's input folder (e.g., `/Volumes/silo2/002_COMFYUI/in`)
+3. **Enter workflow name** in "New Workflow Name" field (optional)
+   - Example: `normal_map_deepbump`, `upscale_esrgan`, `denoise_rife`
+   - If empty, a unique name is auto-generated
+4. **Click "New Workflow" button** in the "Workflow" page
+   - Creates workflow directory: `<COMFYUI_INPUT_PATH>/workflows/<WORKFLOW_NAME>/`
+   - Creates template file: `<WORKFLOW_NAME>.json`
    - Opens ComfyUI in your default browser
-4. **Edit workflow in ComfyUI**
+5. **Edit workflow in ComfyUI**
    - Add your custom nodes between LoadEXR and SaveEXR
    - Configure node parameters
-   - Save the workflow in ComfyUI
-5. **Render in OFX**
-   - The workflow path is automatically set to your new workflow
+   - Save the workflow (creates both `.json` and `_api.json` versions)
+6. **Render in OFX**
+   - The workflow name is automatically set
    - Start rendering to execute the workflow
 
 ### Using an Existing Workflow
 
-1. **Place workflow file** in `${SHARED_MOUNT}/workflows/` directory
-2. **In AnyComfy plugin**, set "Workflow File Path" to your workflow
-   - Can use absolute path or relative path from bundle resources
-3. **Configure server/project settings** as needed
-4. **Render** to execute the workflow
+1. **Create workflow directory** in `<COMFYUI_INPUT_PATH>/workflows/<WORKFLOW_NAME>/`
+2. **Place workflow file** named `<WORKFLOW_NAME>.json` in that directory
+   - Optionally add `<WORKFLOW_NAME>_api.json` for faster execution
+3. **In AnyComfy plugin**, set "Workflow File Path" to the workflow name
+   - Just use the name (e.g., `normal_map_deepbump`), not the full path
+4. **Configure server/project settings** as needed
+5. **Render** to execute the workflow
 
 ## Parameters
 
@@ -243,35 +248,80 @@ Each instance maintains independent state and won't interfere with others.
 
 ## Browser Opening for Workflow Editing
 
-When you click "New Workflow", the plugin:
+### Automatic Workflow Loading (v1.2+)
+
+**NEW**: The plugin now supports automatic workflow loading! When you click "New Workflow":
 
 1. **Creates template workflow** on shared server
-2. **Opens ComfyUI in browser** (platform-specific)
-   - macOS: Uses `open` command
-   - Linux: Uses `xdg-open` command
-   - Windows: Uses `ShellExecuteA` API
-3. **Updates workflow path** parameter to point to new workflow
+2. **Copies workflow** to ComfyUI's input directory
+3. **Opens ComfyUI in browser** with URL parameter: `?load_local_json=<filename>`
+4. **OFX.AutoLoader extension** detects the parameter and loads the workflow automatically
+5. **Workflow is ready to edit** - no manual loading required!
 
-### Manual Workflow Loading
+**Setup Required**:
 
-If the browser doesn't auto-load the workflow:
+- Install `ofx_autoloader.js` extension in ComfyUI (one-time setup)
+- Configure "ComfyUI Input Directory" parameter in plugin
+- **📖 Complete Guide**: [ComfyUI Workflow Auto-Loading](../../../docs/COMFYUI_WORKFLOW_AUTO_LOADING_COMPLETE_GUIDE.md)
+- Quick Install: [INSTALL_AUTO_LOAD.md](INSTALL_AUTO_LOAD.md)
+
+### Manual Workflow Loading (Fallback)
+
+If auto-loading is not configured or the extension is not installed:
 
 1. Open ComfyUI manually in browser
-2. Navigate to File → Load
+2. Navigate to File → Load (or press Ctrl+O)
 3. Browse to the workflow file path (shown in plugin logs)
 4. Edit and save the workflow
 
+**Browser Support** (both modes):
+
+- macOS: Uses `open` command
+- Linux: Uses `xdg-open` command
+- Windows: Uses `ShellExecuteA` API
+
 ## File Organization
 
-### Recommended Directory Structure
+### Workflow Directory Structure (v1.3+)
+
+Workflows are organized in subdirectories where **the directory name matches the workflow name**:
 
 ```
-/mnt/shared/
-├── workflows/
-│   ├── template.json                    # Default template
-│   ├── anycomfy_effect1_1703612400.json # Auto-generated workflows
-│   ├── denoise_v1.json                  # User workflows
-│   └── upscale_4x.json
+<COMFYUI_INPUT_PATH>/workflows/
+├── <WORKFLOW_NAME>/
+│   ├── <WORKFLOW_NAME>.json         # UI format (for editing in ComfyUI)
+│   └── <WORKFLOW_NAME>_api.json     # API format (preferred for execution)
+└── ...
+```
+
+**Example with actual workflows:**
+
+```
+/Volumes/silo2/002_COMFYUI/in/workflows/
+├── normal_map_deepbump/
+│   ├── normal_map_deepbump.json       # Edit this in ComfyUI
+│   └── normal_map_deepbump_api.json   # Auto-used for execution
+├── upscale_esrgan/
+│   ├── upscale_esrgan.json
+│   └── upscale_esrgan_api.json
+└── denoise_rife/
+    └── denoise_rife.json              # API format optional
+```
+
+**Key points:**
+- **Directory name = Workflow name**: The subdirectory must have the same name as the workflow
+- **API format preferred**: If `<name>_api.json` exists, it's used for execution (no conversion needed)
+- **UI format converted**: If only `<name>.json` exists, it's converted to API format at runtime
+
+### Complete Project Structure
+
+```
+/mnt/shared/                           # Shared mount path
+├── <COMFYUI_INPUT_PATH>/              # ComfyUI input directory
+│   └── workflows/                     # All workflows live here
+│       └── <WORKFLOW_NAME>/           # Each workflow in its own subdirectory
+│           ├── <WORKFLOW_NAME>.json   # Workflow file
+│           └── <WORKFLOW_NAME>_api.json  # (optional) API format
 ├── project1/
 │   ├── inputs/
 │   │   └── frame_####.exr
@@ -323,7 +373,7 @@ AnyComfy.ofx.bundle/
 │   └── Resources/
 │       └── workflows/
 │           ├── README.md (workflow documentation)
-│           └── template.json (default template)
+│           └── template.json (default template for new workflows)
 ```
 
 ## Logging

@@ -11,6 +11,7 @@
 #include <ctime>
 #include <thread>
 #include <cstring>
+#include <filesystem>
 
 namespace ComfyUI {
 
@@ -71,7 +72,7 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     , _enableProcessing(nullptr)
     , _serverAddress(nullptr)
     , _serverPort(nullptr)
-    , _sharedMountPath(nullptr)
+    , _macMountPath(nullptr)
     , _projectName(nullptr)
     , _workflowName(nullptr)
     , _outputVersion(nullptr)
@@ -382,8 +383,8 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     _enableProcessing = fetchBooleanParam("enableProcessing");
     _serverAddress = fetchStringParam("serverAddress");
     _serverPort = fetchIntParam("serverPort");
-    _sharedMountPath = fetchStringParam("sharedMountPath");
-    _serverMountPoint = fetchStringParam("serverMountPoint");
+    _macMountPath = fetchStringParam("macMountPath");
+    _winMountPath = fetchStringParam("winMountPath");
     _projectName = fetchStringParam("projectName");
     _workflowName = fetchStringParam("workflowName");
     _outputVersion = fetchStringParam("outputVersion");
@@ -396,6 +397,19 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     _placeholderMode = fetchChoiceParam("placeholderMode");
     _refreshTrigger = fetchDoubleParam("refreshTrigger");
     _jobStatus = fetchStringParam("jobStatus");
+    _jobStatusColor = fetchRGBParam("jobStatusColor");
+
+    if (_logger) {
+        _logger->info("Parameter fetch results:");
+        _logger->info("  _jobStatus: {}", _jobStatus ? "OK" : "NULL");
+        _logger->info("  _jobStatusColor: {}", _jobStatusColor ? "OK" : "NULL");
+
+        if (_jobStatusColor) {
+            double r, g, b;
+            _jobStatusColor->getValue(r, g, b);
+            _logger->info("  Initial jobStatusColor: RGB({}, {}, {})", r, g, b);
+        }
+    }
 
     // Initialize project status indicator color based on initial project name state
     if (_projectName) {
@@ -448,7 +462,10 @@ BasePlugin::~BasePlugin()
 void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
                               const std::string &paramName)
 {
-    if (_logger) _logger->info("Parameter changed: {}", paramName);
+    // Skip logging for frequently-updated status parameters (reduces log noise)
+    if (paramName != "jobStatus" && paramName != "jobStatusColor" && paramName != "refreshTrigger") {
+        if (_logger) _logger->info("Parameter changed: {}", paramName);
+    }
 
     // Update project status indicator color based on whether project is set
     if (paramName == "projectName") {
@@ -592,10 +609,90 @@ void BasePlugin::render(const OFX::RenderArguments &args)
 bool BasePlugin::getRegionOfDefinition(const OFX::RegionOfDefinitionArguments &args,
                                       OfxRectD &rod)
 {
+    int frame = static_cast<int>(args.time);
+
+    // Check if we have cached dimensions for this frame's output
+    {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        auto it = _cacheDimensions.find(frame);
+        if (it != _cacheDimensions.end()) {
+            // Use cached output dimensions
+            int width = it->second.first;
+            int height = it->second.second;
+            rod.x1 = 0;
+            rod.y1 = 0;
+            rod.x2 = width;
+            rod.y2 = height;
+
+            if (_logger) {
+                _logger->debug("Frame {}: RoD from cache: {}x{}", frame, width, height);
+            }
+            return true;
+        }
+    }
+
+    // No cached dimensions yet - check if output file exists
+    std::string cachedPath = constructExpectedOutputPath(frame);
+    bool fileExists = false;
+
+    {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        fileExists = _cacheFileExists.count(cachedPath) > 0;
+    }
+
+    if (!fileExists) {
+        // Quick check if file exists on disk
+        try {
+            fileExists = std::filesystem::exists(cachedPath);
+        } catch (...) {
+            fileExists = false;
+        }
+    }
+
+    if (fileExists) {
+        // Output file exists - read its dimensions
+        try {
+            ImageData outputData = ImageIO::readEXR(cachedPath);
+
+            // Cache the dimensions
+            {
+                std::lock_guard<std::mutex> lock(_cacheMutex);
+                _cacheDimensions[frame] = {outputData.width, outputData.height};
+                _cacheFileExists.insert(cachedPath);
+            }
+
+            // Return RoD based on actual output dimensions
+            rod.x1 = 0;
+            rod.y1 = 0;
+            rod.x2 = outputData.width;
+            rod.y2 = outputData.height;
+
+            if (_logger) {
+                _logger->debug("Frame {}: RoD from output file: {}x{}", frame, outputData.width, outputData.height);
+            }
+            return true;
+
+        } catch (const std::exception& e) {
+            if (_logger) {
+                _logger->debug("Frame {}: Could not read output dimensions: {}", frame, e.what());
+            }
+            // Fall through to source RoD
+        }
+    }
+
+    // No output yet - use source RoD as default
     if (_srcClip && _srcClip->isConnected()) {
         rod = _srcClip->getRegionOfDefinition(args.time);
+
+        if (_logger) {
+            _logger->debug("Frame {}: RoD from source: {}x{}",
+                          frame,
+                          static_cast<int>(rod.x2 - rod.x1),
+                          static_cast<int>(rod.y2 - rod.y1));
+        }
         return true;
     }
+
     return false;
 }
 
@@ -607,8 +704,8 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     std::string address, mountPath, serverMount, project, workflowName, version;
     _serverAddress->getValue(address);
     int port = _serverPort->getValue();
-    _sharedMountPath->getValue(mountPath);
-    _serverMountPoint->getValue(serverMount);
+    _macMountPath->getValue(mountPath);
+    _winMountPath->getValue(serverMount);
     _projectName->getValue(project);
     _workflowName->getValue(workflowName);
     _outputVersion->getValue(version);
@@ -1038,7 +1135,7 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame)
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _projectName->getValue(project);
     _workflowName->getValue(workflow);
     _outputVersion->getValue(version);
@@ -1139,7 +1236,7 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _projectName->getValue(project);
     _workflowName->getValue(workflow);
     _outputVersion->getValue(version);
@@ -1290,8 +1387,8 @@ std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
 
     // Get mount paths
     std::string clientMount, serverMount;
-    _sharedMountPath->getValue(clientMount);
-    _serverMountPoint->getValue(serverMount);
+    _macMountPath->getValue(clientMount);
+    _winMountPath->getValue(serverMount);
 
     if (_logger) {
         _logger->info("  Client mount: {}", clientMount);
@@ -1342,7 +1439,7 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
     // Example: /Volumes/silo2/002_COMFYUI/out/TEST_SAM/segmentation/v001/shot01.0056.exr
 
     std::string mountPath, project, workflow, version;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _projectName->getValue(project);
     _workflowName->getValue(workflow);
     _outputVersion->getValue(version);
@@ -1362,40 +1459,116 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
     return outputPath.str();
 }
 
+std::string BasePlugin::constructInputPath(int frame)
+{
+    // Construct the input file path that was written by writeInputImage()
+    // Pattern: {mountPath}/in/{project}/{workflow}/{version}/{basename}.{frame:04d}.exr
+    //
+    // Example: /Volumes/silo2/002_COMFYUI/in/TEST_SAM/segmentation/v001/shot01.0056.exr
+
+    std::string mountPath, project, workflow, version;
+    _macMountPath->getValue(mountPath);
+    _projectName->getValue(project);
+    _workflowName->getValue(workflow);
+    _outputVersion->getValue(version);
+
+    // Get effective basename (auto-generated or manual)
+    std::string basename = getEffectiveBasename();
+
+    // Construct full path
+    std::ostringstream inputPath;
+    inputPath << mountPath << "/in/"
+              << project << "/"
+              << workflow << "/"
+              << version << "/"
+              << basename << "."
+              << std::setfill('0') << std::setw(4) << frame << ".exr";
+
+    return inputPath.str();
+}
+
 std::string BasePlugin::getEffectiveBasename()
 {
-    // Always auto-generate basename from project + instance name (Pybox pattern)
-    if (!_instanceName.empty()) {
-        std::string project;
-        _projectName->getValue(project);
+    // Auto-generate basename from project + instance name
+    // For generic plugins (AnyComfy), workflow name is also included via includeWorkflowInBasename()
+    //
+    // Specialized plugins (SAMSegmentation): {project}_{instance}
+    //   Example: TEST_SAMSegmentation
+    //
+    // Generic plugins (AnyComfy): {project}_{workflow}_{instance}
+    //   Example: TEST_JULIEN_AnyComfy
 
+    std::string project;
+    _projectName->getValue(project);
+
+    // Check if this plugin type wants workflow in basename (generic plugins like AnyComfy)
+    bool useWorkflow = includeWorkflowInBasename();
+    std::string sanitizedWorkflow;
+
+    if (useWorkflow) {
+        std::string workflow;
+        _workflowName->getValue(workflow);
+
+        // Sanitize workflow name: replace non-alphanumeric characters with underscores
+        sanitizedWorkflow = workflow;
+        for (char& c : sanitizedWorkflow) {
+            if (!std::isalnum(static_cast<unsigned char>(c))) {
+                c = '_';
+            }
+        }
+        // Remove leading/trailing underscores that might result from sanitization
+        while (!sanitizedWorkflow.empty() && sanitizedWorkflow.front() == '_') {
+            sanitizedWorkflow.erase(0, 1);
+        }
+        while (!sanitizedWorkflow.empty() && sanitizedWorkflow.back() == '_') {
+            sanitizedWorkflow.pop_back();
+        }
+    }
+
+    if (!_instanceName.empty()) {
         // Sanitize instance name: replace non-alphanumeric characters with underscores
-        std::string sanitizedName = _instanceName;
-        for (char& c : sanitizedName) {
+        std::string sanitizedInstance = _instanceName;
+        for (char& c : sanitizedInstance) {
             if (!std::isalnum(static_cast<unsigned char>(c))) {
                 c = '_';
             }
         }
 
-        // Generate basename: {project}_{instance_name}
-        std::string generatedBasename = project + "_" + sanitizedName;
+        // Generate basename
+        std::string generatedBasename;
+        if (useWorkflow && !sanitizedWorkflow.empty()) {
+            // Generic plugin: {project}_{workflow}_{instance}
+            generatedBasename = project + "_" + sanitizedWorkflow + "_" + sanitizedInstance;
+        } else {
+            // Specialized plugin: {project}_{instance}
+            generatedBasename = project + "_" + sanitizedInstance;
+        }
 
         if (_logger) {
-            _logger->info("Auto-generated basename: {} (from project='{}', instance='{}')",
-                         generatedBasename, project, sanitizedName);
+            if (useWorkflow) {
+                _logger->info("Auto-generated basename: {} (project='{}', workflow='{}', instance='{}')",
+                             generatedBasename, project, sanitizedWorkflow, sanitizedInstance);
+            } else {
+                _logger->info("Auto-generated basename: {} (project='{}', instance='{}')",
+                             generatedBasename, project, sanitizedInstance);
+            }
         }
 
         return generatedBasename;
     } else {
-        // Fallback: if no instance name, use project name as basename
-        std::string project;
-        _projectName->getValue(project);
-
-        if (_logger) {
-            _logger->warn("No instance name available, using project name as basename: {}", project);
+        // Fallback: if no instance name
+        std::string generatedBasename;
+        if (useWorkflow && !sanitizedWorkflow.empty()) {
+            generatedBasename = project + "_" + sanitizedWorkflow;
+        } else {
+            generatedBasename = project;
         }
 
-        return project;
+        if (_logger) {
+            _logger->warn("No instance name available, using basename: {}", generatedBasename);
+        }
+
+        return generatedBasename;
     }
 }
 
@@ -1559,7 +1732,7 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
 
     // Get parameters for replacements
     std::string mountPath, project, workflowName, version;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _projectName->getValue(project);
     _workflowName->getValue(workflowName);
     _outputVersion->getValue(version);
@@ -1688,10 +1861,10 @@ void BasePlugin::renderBlocking(const OFX::RenderArguments &args)
 
     // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
     std::string mountPath, workflowName, version, serverMount;
-    _sharedMountPath->getValue(mountPath);
+    _macMountPath->getValue(mountPath);
     _workflowName->getValue(workflowName);
     _outputVersion->getValue(version);
-    _serverMountPoint->getValue(serverMount);
+    _winMountPath->getValue(serverMount);
 
     if (_logger) {
         _logger->info("========================================");
@@ -1916,6 +2089,11 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
             this->onJobComplete(completedFrame, success);
         });
 
+        // Set status update callback (for periodic job status refresh)
+        _jobManager->setStatusUpdateCallback([this]() {
+            this->updateJobStatusDisplay();
+        });
+
         if (_logger) _logger->info("AsyncJobManager initialized successfully");
     }
 
@@ -1948,7 +2126,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
 
         // Get mount path info for directory creation
         std::string mountPath, workflowName, version;
-        _sharedMountPath->getValue(mountPath);
+        _macMountPath->getValue(mountPath);
         _workflowName->getValue(workflowName);
         _outputVersion->getValue(version);
 
@@ -2079,6 +2257,9 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
             _jobManager->setCompletionCallback([this](int completedFrame, bool success) {
                 this->onJobComplete(completedFrame, success);
             });
+            _jobManager->setStatusUpdateCallback([this]() {
+                this->updateJobStatusDisplay();
+            });
         }
 
         // Submit job asynchronously (TRULY NON-BLOCKING!)
@@ -2188,43 +2369,66 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
         throw std::runtime_error("Failed to fetch destination image");
     }
 
-    // Get FULL image dimensions from Region of Definition, not just render window
-    // IMPORTANT: getBounds() returns the render window (portion being rendered),
-    // but cached EXR files are always full resolution, so we must compare against RoD
-    OfxRectD rod = _srcClip->getRegionOfDefinition(args.time);
-    int expectedWidth = static_cast<int>(rod.x2 - rod.x1);
-    int expectedHeight = static_cast<int>(rod.y2 - rod.y1);
+    int frame = static_cast<int>(args.time);
+
+    // Get expected dimensions from the INPUT EXR that was sent to ComfyUI
+    // This is critical when processing resized images - we need to validate against
+    // the actual input dimensions, not the original RoD
+    std::string inputPath = constructInputPath(frame);
+    int expectedWidth = 0;
+    int expectedHeight = 0;
+
+    try {
+        ImageData inputImageData = ImageIO::readEXR(inputPath);
+        expectedWidth = inputImageData.width;
+        expectedHeight = inputImageData.height;
+
+        if (_logger) {
+            _logger->debug("Frame {}: Input dimensions from {}x{} (from {})",
+                          frame, expectedWidth, expectedHeight, inputPath);
+        }
+    } catch (const std::exception& e) {
+        // If we can't read the input file, fall back to RoD
+        // This handles edge cases where input may have been deleted
+        if (_logger) {
+            _logger->warn("Frame {}: Could not read input EXR, falling back to RoD: {}", frame, e.what());
+        }
+        OfxRectD rod = _srcClip->getRegionOfDefinition(args.time);
+        expectedWidth = static_cast<int>(rod.x2 - rod.x1);
+        expectedHeight = static_cast<int>(rod.y2 - rod.y1);
+    }
 
     if (_logger) {
         OfxRectI renderWindow = dst->getBounds();
-        _logger->debug("Frame {}: Full image (RoD)={}x{}, Render window=({},{} to {},{})",
-                      static_cast<int>(args.time),
-                      expectedWidth, expectedHeight,
+        _logger->debug("Frame {}: Expected dimensions={}x{}, Render window=({},{} to {},{})",
+                      frame, expectedWidth, expectedHeight,
                       renderWindow.x1, renderWindow.y1,
                       renderWindow.x2, renderWindow.y2);
     }
 
-    // Read EXR file
+    // Read cached output EXR file
     ImageData outputImageData = ImageIO::readEXR(cachedPath);
 
-    // CRITICAL: Validate that cached image dimensions match FULL image dimensions
-    // Note: We compare against RoD, not render window
-    if (outputImageData.width != expectedWidth || outputImageData.height != expectedHeight) {
-        std::ostringstream error;
-        error << "Cached image dimensions (" << outputImageData.width << "x" << outputImageData.height
-              << ") do not match expected full image dimensions (" << expectedWidth << "x" << expectedHeight << "). "
-              << "This can happen when:\n"
-              << "  1. Timeline/project resolution changed after cache was created\n"
-              << "  2. Source clip resolution changed\n"
-              << "  3. Render resolution settings changed\n"
-              << "Cache file: " << cachedPath << "\n"
-              << "SOLUTION: The cached file will be invalidated and re-rendered at the correct resolution.";
+    // Cache output dimensions for dynamic RoD (allows canvas to resize to match output)
+    {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        _cacheDimensions[frame] = {outputImageData.width, outputImageData.height};
+    }
 
-        if (_logger) {
-            _logger->warn("Frame {}: {}", static_cast<int>(args.time), error.str());
+    // NOTE: We do NOT validate that output dimensions match input dimensions
+    // because ComfyUI workflows can include resize operations.
+    // For example, upscaling workflows will produce larger outputs than inputs.
+    // We only validate that the output can be rendered to the requested render window.
+
+    if (_logger) {
+        _logger->debug("Frame {}: Cached output dimensions={}x{}, input dimensions={}x{}",
+                      frame, outputImageData.width, outputImageData.height,
+                      expectedWidth, expectedHeight);
+
+        if (outputImageData.width != expectedWidth || outputImageData.height != expectedHeight) {
+            _logger->info("Frame {}: Output resolution differs from input (workflow may include resize operation)",
+                         frame);
         }
-
-        throw std::runtime_error(error.str());
     }
 
     // Get render window bounds - we may only need to render a portion
@@ -2232,9 +2436,12 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
     int renderWidth = renderWindow.x2 - renderWindow.x1;
     int renderHeight = renderWindow.y2 - renderWindow.y1;
 
-    // Check if we're rendering the full image or just a portion
+    // Check if output dimensions match the render window
+    // Note: We compare against OUTPUT dimensions, not INPUT dimensions,
+    // because workflows can resize images
     bool isFullFrameRender = (renderWindow.x1 == 0 && renderWindow.y1 == 0 &&
-                             renderWidth == expectedWidth && renderHeight == expectedHeight);
+                             renderWidth == outputImageData.width &&
+                             renderHeight == outputImageData.height);
 
     if (_logger) {
         _logger->debug("Frame {}: Cached image={}x{}, Render request={}x{}, Full frame={}",
@@ -2244,32 +2451,99 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
                       isFullFrameRender);
     }
 
-    // If rendering a sub-region, extract that portion from the cached image
+    // Handle resolution mismatch (e.g., when workflow includes resize)
     ImageData regionData = outputImageData;
+
+    // If render window doesn't match output dimensions, we need to handle it
     if (!isFullFrameRender) {
-        // Extract the render window region from the full cached image
-        regionData.width = renderWidth;
-        regionData.height = renderHeight;
+        // Check if this is a sub-region render or a resolution mismatch
+        bool isSubRegion = (renderWidth <= outputImageData.width &&
+                           renderHeight <= outputImageData.height &&
+                           renderWindow.x1 >= 0 && renderWindow.y1 >= 0 &&
+                           renderWindow.x2 <= outputImageData.width &&
+                           renderWindow.y2 <= outputImageData.height);
 
-        std::vector<float> extractedPixels;
-        extractedPixels.reserve(renderWidth * renderHeight * outputImageData.channels);
+        if (isSubRegion) {
+            // Extract the render window region from the full cached image
+            regionData.width = renderWidth;
+            regionData.height = renderHeight;
 
-        for (int y = renderWindow.y1; y < renderWindow.y2; ++y) {
-            for (int x = renderWindow.x1; x < renderWindow.x2; ++x) {
-                int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
-                for (int c = 0; c < outputImageData.channels; ++c) {
-                    extractedPixels.push_back(outputImageData.pixels[srcIdx + c]);
+            std::vector<float> extractedPixels;
+            extractedPixels.reserve(renderWidth * renderHeight * outputImageData.channels);
+
+            for (int y = renderWindow.y1; y < renderWindow.y2; ++y) {
+                for (int x = renderWindow.x1; x < renderWindow.x2; ++x) {
+                    int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
+                    for (int c = 0; c < outputImageData.channels; ++c) {
+                        extractedPixels.push_back(outputImageData.pixels[srcIdx + c]);
+                    }
                 }
             }
-        }
 
-        regionData.pixels = std::move(extractedPixels);
+            regionData.pixels = std::move(extractedPixels);
 
-        if (_logger) {
-            _logger->debug("Frame {}: Extracted region ({},{}) to ({},{}) from cached image",
-                          static_cast<int>(args.time),
-                          renderWindow.x1, renderWindow.y1,
-                          renderWindow.x2, renderWindow.y2);
+            if (_logger) {
+                _logger->debug("Frame {}: Extracted sub-region ({},{}) to ({},{}) from cached image",
+                              static_cast<int>(args.time),
+                              renderWindow.x1, renderWindow.y1,
+                              renderWindow.x2, renderWindow.y2);
+            }
+        } else {
+            // Resolution mismatch - output from workflow has different size than render window
+            // This can happen when the workflow includes resize operations
+            if (_logger) {
+                _logger->info("Frame {}: Output resolution ({}x{}) differs from render window ({}x{}). "
+                             "Handling resolution mismatch...",
+                             frame, outputImageData.width, outputImageData.height,
+                             renderWidth, renderHeight);
+            }
+
+            // Strategy: Crop or pad to fit the render window
+            // CRITICAL: Must flip Y-axis because OFX uses bottom-up coordinates (Y=0 at bottom)
+            // while EXR uses top-down coordinates (Y=0 at top)
+            regionData.width = renderWidth;
+            regionData.height = renderHeight;
+
+            std::vector<float> resizedPixels(renderWidth * renderHeight * outputImageData.channels, 0.0f);
+
+            // Calculate copy dimensions (intersection of output and render window)
+            int copyWidth = std::min(outputImageData.width, renderWidth);
+            int copyHeight = std::min(outputImageData.height, renderHeight);
+
+            // Center the output in the render window if sizes differ
+            int offsetX = (renderWidth - outputImageData.width) / 2;
+            int offsetY = (renderHeight - outputImageData.height) / 2;
+            offsetX = std::max(0, offsetX);
+            offsetY = std::max(0, offsetY);
+
+            // Copy pixels from output to the centered position in render window
+            // WITH Y-AXIS FLIP to convert from EXR (top-down) to OFX (bottom-up) coordinates
+            for (int y = 0; y < copyHeight; ++y) {
+                for (int x = 0; x < copyWidth; ++x) {
+                    // Source: Read from EXR (top-down, Y=0 at top)
+                    int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
+
+                    // Destination: Write to OFX buffer (bottom-up, Y=0 at bottom)
+                    // Flip Y-axis: dst_y = (renderHeight - 1) - (src_y + offsetY)
+                    int dstY = (renderHeight - 1) - (y + offsetY);
+                    int dstX = x + offsetX;
+                    int dstIdx = (dstY * renderWidth + dstX) * outputImageData.channels;
+
+                    // Bounds check
+                    if (dstIdx >= 0 && dstIdx + outputImageData.channels <= static_cast<int>(resizedPixels.size())) {
+                        for (int c = 0; c < outputImageData.channels; ++c) {
+                            resizedPixels[dstIdx + c] = outputImageData.pixels[srcIdx + c];
+                        }
+                    }
+                }
+            }
+
+            regionData.pixels = std::move(resizedPixels);
+
+            if (_logger) {
+                _logger->info("Frame {}: Fitted output ({}x{}) into render window ({}x{}) at offset ({},{}) with Y-axis flip",
+                             frame, copyWidth, copyHeight, renderWidth, renderHeight, offsetX, offsetY);
+            }
         }
     }
 
@@ -2279,6 +2553,15 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
     int dstBitDepthInt = 32;
     if (dstBitDepth == OFX::eBitDepthUByte) dstBitDepthInt = 8;
     else if (dstBitDepth == OFX::eBitDepthUShort) dstBitDepthInt = 16;
+
+    // Verify dimensions match before copying to OFX buffer
+    if (regionData.width != renderWidth || regionData.height != renderHeight) {
+        std::ostringstream error;
+        error << "Internal error: Region data dimensions (" << regionData.width << "x" << regionData.height
+              << ") do not match render window (" << renderWidth << "x" << renderHeight << ")";
+        if (_logger) _logger->error("Frame {}: {}", frame, error.str());
+        throw std::runtime_error(error.str());
+    }
 
     ImageIO::toOFXBuffer(regionData, dst->getPixelData(), dst->getRowBytes(),
                          dstPixelComponents, dstBitDepthInt);
@@ -2333,7 +2616,9 @@ void BasePlugin::onJobComplete(int frame, bool success)
 
 void BasePlugin::updateJobStatusDisplay()
 {
-    if (!_jobManager || !_jobStatus) return;
+    if (!_jobManager || !_jobStatus || !_jobStatusColor) {
+        return;  // Silently skip if objects not initialized
+    }
 
     try {
         int pendingCount = _jobManager->getPendingJobCount();
@@ -2341,9 +2626,12 @@ void BasePlugin::updateJobStatusDisplay()
         std::vector<int> failedFrames = _jobManager->getFailedFrames();
 
         std::string statusText;
+        double r = 0.5, g = 0.5, b = 0.5;  // Default: gray (neutral)
 
-        // Show failed frames first (most important)
+        // Determine status and color
         if (!failedFrames.empty()) {
+            // RED: ComfyUI error detected
+            r = 1.0; g = 0.0; b = 0.0;
             statusText = "FAILED frames: ";
             for (size_t i = 0; i < std::min(failedFrames.size(), size_t(5)); ++i) {
                 if (i > 0) statusText += ", ";
@@ -2352,30 +2640,75 @@ void BasePlugin::updateJobStatusDisplay()
             if (failedFrames.size() > 5) {
                 statusText += " (+" + std::to_string(failedFrames.size() - 5) + " more)";
             }
-            statusText += " | ";
+            if (pendingCount > 0) {
+                statusText += " | ";
+            }
         }
 
         // Then show pending frames
         if (pendingCount == 0) {
             if (failedFrames.empty()) {
-                statusText = "No jobs pending";
+                // GREEN: All jobs successful (only if we had jobs)
+                // Check if we've ever had jobs by seeing if there are completed jobs
+                auto allJobs = _jobManager->getAllJobs();
+                bool hasCompletedJobs = false;
+                for (const auto& [frame, job] : allJobs) {
+                    if (job.status == JobStatus::COMPLETED) {
+                        hasCompletedJobs = true;
+                        break;
+                    }
+                }
+
+                if (hasCompletedJobs) {
+                    r = 0.0; g = 0.8; b = 0.0;  // Green for success
+                    statusText = "All jobs completed successfully";
+                } else {
+                    r = 0.5; g = 0.5; b = 0.5;  // Gray for no jobs yet
+                    statusText = "No jobs pending";
+                }
             } else {
+                // Failed jobs exist, but no pending ones
                 statusText += "No jobs pending";
             }
-        } else if (pendingCount <= 5) {
-            statusText += "Pending: ";
-            for (size_t i = 0; i < pendingFrames.size(); ++i) {
-                if (i > 0) statusText += ", ";
-                statusText += std::to_string(pendingFrames[i]);
-            }
         } else {
-            statusText += std::to_string(pendingCount) + " frames pending";
+            // YELLOW: At least one frame pending
+            if (failedFrames.empty()) {
+                r = 1.0; g = 0.8; b = 0.0;  // Yellow only if no failures
+            }
+
+            if (pendingCount <= 5) {
+                statusText += "Pending: ";
+                for (size_t i = 0; i < pendingFrames.size(); ++i) {
+                    if (i > 0) statusText += ", ";
+                    statusText += std::to_string(pendingFrames[i]);
+                }
+            } else {
+                statusText += std::to_string(pendingCount) + " frames pending";
+            }
         }
 
-        _jobStatus->setValue(statusText);
+        // Log only when status actually changes
+        static std::string lastStatusText;
+        if (_logger && statusText != lastStatusText) {
+            _logger->info("Job status: {}", statusText);
+            lastStatusText = statusText;
+        }
+
+        // Update parameters
+        try {
+            _jobStatus->setValue(statusText);
+        } catch (const std::exception& e) {
+            if (_logger) _logger->error("Failed to update job status text: {}", e.what());
+        }
+
+        try {
+            _jobStatusColor->setValue(r, g, b);
+        } catch (const std::exception& e) {
+            if (_logger) _logger->error("Failed to update job status color: {}", e.what());
+        }
 
     } catch (const std::exception& e) {
-        if (_logger) _logger->error("Failed to update job status display: {}", e.what());
+        if (_logger) _logger->error("Failed to update job status: {}", e.what());
     }
 }
 
@@ -2498,6 +2831,103 @@ int BasePlugin::findLastValidFrame(double currentTime)
 }
 
 // ============================================================================
+// Configuration Management
+// ============================================================================
+
+json BasePlugin::loadConfigDefaults()
+{
+    // Try to load config from bundle resources
+    // This is a static method, so we need to find the bundle path manually
+
+    json config;
+
+    // Try to get or create a logger for config loading
+    auto logger = spdlog::get("comfyui_plugin");
+    if (!logger) {
+        // No logger available yet (first load), create a basic one
+        try {
+            const char* home = getenv("HOME");
+            if (home) {
+                auto now = std::chrono::system_clock::now();
+                std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+                std::tm* now_tm = std::localtime(&now_c);
+                char dateStamp[16];
+                std::strftime(dateStamp, sizeof(dateStamp), "%Y%m%d", now_tm);
+                std::string logPath = std::string(home) + "/comfyui_plugin_" + std::string(dateStamp) + ".log";
+                logger = spdlog::basic_logger_mt("comfyui_plugin", logPath);
+            }
+        } catch (...) {
+            // Ignore logger creation errors
+        }
+    }
+
+    if (logger) {
+        logger->info("=== BasePlugin::loadConfigDefaults() called ===");
+    }
+
+    try {
+        // Get the plugin bundle path from environment or OFX standard locations
+        std::string bundlePath;
+
+        // On macOS, OFX plugins are in ~/Library/OFX/Plugins/ or /Library/OFX/Plugins/
+        // Check common locations
+        const char* home = getenv("HOME");
+        if (home) {
+            std::vector<std::string> searchPaths = {
+                std::string(home) + "/Library/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json",
+                std::string(home) + "/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json",
+                "/Library/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json"
+            };
+
+            if (logger) {
+                logger->info("Searching for config file in {} locations:", searchPaths.size());
+            }
+
+            for (const auto& path : searchPaths) {
+                if (logger) {
+                    logger->info("  Checking: {}", path);
+                }
+
+                std::ifstream configFile(path);
+                if (configFile.is_open()) {
+                    configFile >> config;
+                    configFile.close();
+
+                    // Log successful load
+                    if (logger) {
+                        logger->info("✓ Successfully loaded config from: {}", path);
+                        logger->info("Config contents: {}", config.dump(2));
+                    }
+
+                    return config;
+                } else {
+                    if (logger) {
+                        logger->debug("  ✗ Not found");
+                    }
+                }
+            }
+        } else {
+            if (logger) {
+                logger->error("HOME environment variable not set!");
+            }
+        }
+
+        // If we get here, config file not found - return empty JSON
+        if (logger) {
+            logger->warn("Config file not found in any standard location, using hardcoded defaults");
+        }
+
+    } catch (const std::exception& e) {
+        if (logger) {
+            logger->error("Failed to load config defaults: {}", e.what());
+        }
+    }
+
+    // Return empty JSON if loading failed
+    return json();
+}
+
+// ============================================================================
 // Parameter Description
 // ============================================================================
 
@@ -2505,8 +2935,20 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
                                           OFX::ContextEnum /*context*/,
                                           OFX::PageParamDescriptor *page,
                                           OFX::PageParamDescriptor * /*unused2*/,
-                                          OFX::PageParamDescriptor * /*unused3*/)
+                                          OFX::PageParamDescriptor * /*unused3*/,
+                                          const json* configDefaults)
 {
+    // Log config loading status
+    auto logger = spdlog::get("comfyui_plugin");
+    if (logger) {
+        if (configDefaults && !configDefaults->empty()) {
+            logger->info("=== Using config defaults from JSON ===");
+            logger->info("Config contents: {}", configDefaults->dump(2));
+        } else {
+            logger->warn("=== No config defaults available, using hardcoded values ===");
+        }
+    }
+
     // Single page with groups for Flame compatibility
 
     // ==== PROJECT GROUP ====
@@ -2536,15 +2978,33 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
 
     OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
     workflow->setLabel("Workflow Name");
-    workflow->setHint("Workflow subdirectory name (e.g., 'segmentation', 'upscale')");
-    workflow->setDefault("segmentation");
+    workflow->setHint("Workflow/effect name for file organization (e.g., 'segmentation', 'upscale')");
+    // Use config default if available, otherwise fallback to generic placeholder
+    // Specialized plugins should override this with their effect name
+    std::string workflowDefault = "effect";
+    if (configDefaults && configDefaults->contains("project") && (*configDefaults)["project"].contains("workflowName")) {
+        workflowDefault = (*configDefaults)["project"]["workflowName"].get<std::string>();
+        if (logger) {
+            logger->info("workflowName: Using config value: '{}'", workflowDefault);
+        }
+    } else {
+        if (logger) {
+            logger->info("workflowName: Using hardcoded default: '{}'", workflowDefault);
+        }
+    }
+    workflow->setDefault(workflowDefault.c_str());
     workflow->setParent(*projectGroup);
     page->addChild(*workflow);
 
     OFX::StringParamDescriptor *version = desc.defineStringParam("outputVersion");
     version->setLabel("Output Version");
     version->setHint("Version identifier for output files (e.g., 'v001', 'v002')");
-    version->setDefault("v001");
+    // Use config default if available, otherwise fallback to hardcoded default
+    std::string versionDefault = "v001";
+    if (configDefaults && configDefaults->contains("project") && (*configDefaults)["project"].contains("outputVersion")) {
+        versionDefault = (*configDefaults)["project"]["outputVersion"].get<std::string>();
+    }
+    version->setDefault(versionDefault.c_str());
     version->setParent(*projectGroup);
     page->addChild(*version);
 
@@ -2566,7 +3026,12 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::BooleanParamDescriptor *enableProcessing = desc.defineBooleanParam("enableProcessing");
     enableProcessing->setLabel("Enable ComfyUI Processing");
     enableProcessing->setHint("Enable or disable ComfyUI workflow execution. When disabled, input is passed through unchanged. DISABLE THIS during plugin initialization to prevent blocking UI load!");
-    enableProcessing->setDefault(false);  // DEFAULT TO OFF for smooth UI loading
+    // Use config default if available, otherwise fallback to hardcoded default
+    bool enableProcessingDefault = false;
+    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("enableProcessing")) {
+        enableProcessingDefault = (*configDefaults)["controls"]["enableProcessing"].get<bool>();
+    }
+    enableProcessing->setDefault(enableProcessingDefault);
     enableProcessing->setAnimates(false);
     enableProcessing->setParent(*processingGroup);
     page->addChild(*enableProcessing);
@@ -2578,7 +3043,12 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
                        "Non-Blocking: Progressive rendering (returns placeholder immediately, updates when ready)");
     asyncMode->appendOption("Blocking (Wait for Result)");
     asyncMode->appendOption("Non-Blocking (Progressive)");
-    asyncMode->setDefault(1);  // Non-blocking by default for better UX
+    // Use config default if available, otherwise fallback to hardcoded default
+    int asyncModeDefault = 1;
+    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("asyncMode")) {
+        asyncModeDefault = (*configDefaults)["controls"]["asyncMode"].get<int>();
+    }
+    asyncMode->setDefault(asyncModeDefault);
     asyncMode->setAnimates(false);
     asyncMode->setIsSecret(true);  // Hidden from UI
     asyncMode->setParent(*processingGroup);
@@ -2592,7 +3062,12 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     placeholderMode->appendOption("Checkerboard Pattern");
     placeholderMode->appendOption("Gray Frame");
     placeholderMode->appendOption("Last Valid Result");
-    placeholderMode->setDefault(1);  // Checkerboard pattern
+    // Use config default if available, otherwise fallback to hardcoded default
+    int placeholderModeDefault = 1;
+    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("placeholderMode")) {
+        placeholderModeDefault = (*configDefaults)["controls"]["placeholderMode"].get<int>();
+    }
+    placeholderMode->setDefault(placeholderModeDefault);
     placeholderMode->setAnimates(false);
     placeholderMode->setIsSecret(true);  // Hidden from UI
     placeholderMode->setParent(*processingGroup);
@@ -2608,6 +3083,24 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     jobStatus->setParent(*processingGroup);
     page->addChild(*jobStatus);
 
+    // Job status color indicator (visual feedback)
+    OFX::RGBParamDescriptor *jobStatusColor = desc.defineRGBParam("jobStatusColor");
+    jobStatusColor->setLabel("Jobs status");
+    jobStatusColor->setHint(
+        "Visual status indicator:\n"
+        "• Gray: No jobs yet (neutral)\n"
+        "• Yellow: At least one frame pending\n"
+        "• Red: ComfyUI error detected\n"
+        "• Green: All jobs completed successfully\n\n"
+        "This color updates automatically as jobs progress."
+    );
+    jobStatusColor->setDefault(0.5, 0.5, 0.5);  // Gray by default
+    jobStatusColor->setAnimates(false);  // Not animatable (updates programmatically)
+    jobStatusColor->setEvaluateOnChange(false);  // Don't trigger renders when color changes
+    // NOTE: NOT using setEnabled(false) - that might block programmatic updates in some hosts
+    jobStatusColor->setParent(*processingGroup);
+    page->addChild(*jobStatusColor);
+
     // Hidden refresh trigger for cache invalidation
     OFX::DoubleParamDescriptor *refreshTrigger = desc.defineDoubleParam("refreshTrigger");
     refreshTrigger->setLabel("Refresh Trigger");
@@ -2620,14 +3113,24 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::BooleanParamDescriptor *enableCache = desc.defineBooleanParam("enableCache");
     enableCache->setLabel("Enable Cache");
     enableCache->setHint("Use ComfyUI's caching system to speed up repeated renders");
-    enableCache->setDefault(true);
+    // Use config default if available, otherwise fallback to hardcoded default
+    bool enableCacheDefault = true;
+    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("enableCache")) {
+        enableCacheDefault = (*configDefaults)["controls"]["enableCache"].get<bool>();
+    }
+    enableCache->setDefault(enableCacheDefault);
     enableCache->setParent(*processingGroup);
     page->addChild(*enableCache);
 
     OFX::IntParamDescriptor *timeout = desc.defineIntParam("timeout");
     timeout->setLabel("Timeout (s)");
     timeout->setHint("Maximum time to wait for ComfyUI processing");
-    timeout->setDefault(300);
+    // Use config default if available, otherwise fallback to hardcoded default
+    int timeoutDefault = 300;
+    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("timeout")) {
+        timeoutDefault = (*configDefaults)["controls"]["timeout"].get<int>();
+    }
+    timeout->setDefault(timeoutDefault);
     timeout->setRange(10, 3600);
     timeout->setDisplayRange(30, 600);
     timeout->setParent(*processingGroup);
@@ -2642,33 +3145,60 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::StringParamDescriptor *serverAddr = desc.defineStringParam("serverAddress");
     serverAddr->setLabel("Server Address");
     serverAddr->setHint("Hostname or IP address of ComfyUI server");
-    serverAddr->setDefault("localhost");
+    // Use config default if available, otherwise fallback to hardcoded default
+    std::string serverAddressDefault = "localhost";
+    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("serverAddress")) {
+        serverAddressDefault = (*configDefaults)["server"]["serverAddress"].get<std::string>();
+        if (logger) {
+            logger->info("serverAddress: Using config value: '{}'", serverAddressDefault);
+        }
+    } else {
+        if (logger) {
+            logger->info("serverAddress: Using hardcoded default: '{}'", serverAddressDefault);
+        }
+    }
+    serverAddr->setDefault(serverAddressDefault.c_str());
     serverAddr->setParent(*serverGroup);
     page->addChild(*serverAddr);
 
     OFX::IntParamDescriptor *serverPort = desc.defineIntParam("serverPort");
     serverPort->setLabel("Port");
     serverPort->setHint("ComfyUI server port number");
-    serverPort->setDefault(8188);
+    // Use config default if available, otherwise fallback to hardcoded default
+    int serverPortDefault = 8188;
+    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("serverPort")) {
+        serverPortDefault = (*configDefaults)["server"]["serverPort"].get<int>();
+    }
+    serverPort->setDefault(serverPortDefault);
     serverPort->setRange(1, 65535);
     serverPort->setDisplayRange(8000, 9000);
     serverPort->setParent(*serverGroup);
     page->addChild(*serverPort);
 
-    OFX::StringParamDescriptor *mountPath = desc.defineStringParam("sharedMountPath");
-    mountPath->setLabel("Client Mount Path");
-    mountPath->setHint("Client-side path to shared storage (macOS: /Volumes/silo2/002_COMFYUI, Linux: /mnt/storage)");
-    mountPath->setStringType(OFX::eStringTypeDirectoryPath);
-    mountPath->setDefault("/Volumes/silo2/002_COMFYUI");
-    mountPath->setParent(*serverGroup);
-    page->addChild(*mountPath);
+    OFX::StringParamDescriptor *macMount = desc.defineStringParam("macMountPath");
+    macMount->setLabel("macOS Mount Path");
+    macMount->setHint("macOS client mount path (e.g., /Volumes/silo2/002_COMFYUI)");
+    macMount->setStringType(OFX::eStringTypeDirectoryPath);
+    // Use config default if available, otherwise fallback to hardcoded default
+    std::string macMountPathDefault = "/Volumes/silo2/002_COMFYUI";
+    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("macMountPath")) {
+        macMountPathDefault = (*configDefaults)["server"]["macMountPath"].get<std::string>();
+    }
+    macMount->setDefault(macMountPathDefault.c_str());
+    macMount->setParent(*serverGroup);
+    page->addChild(*macMount);
 
-    OFX::StringParamDescriptor *serverMount = desc.defineStringParam("serverMountPoint");
-    serverMount->setLabel("Server Mount Point");
-    serverMount->setHint("Server-side mount point (Windows: Z:, Linux: /mnt/storage)");
-    serverMount->setDefault("Z:");
-    serverMount->setParent(*serverGroup);
-    page->addChild(*serverMount);
+    OFX::StringParamDescriptor *winMount = desc.defineStringParam("winMountPath");
+    winMount->setLabel("Windows Mount Path");
+    winMount->setHint("Windows server mount path (UNC: \\\\server\\share)");
+    // Use config default if available, otherwise fallback to hardcoded default
+    std::string winMountPathDefault = "\\\\192.168.1.110\\silo2\\002_COMFYUI";
+    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("winMountPath")) {
+        winMountPathDefault = (*configDefaults)["server"]["winMountPath"].get<std::string>();
+    }
+    winMount->setDefault(winMountPathDefault.c_str());
+    winMount->setParent(*serverGroup);
+    page->addChild(*winMount);
 }
 
 } // namespace ComfyUI

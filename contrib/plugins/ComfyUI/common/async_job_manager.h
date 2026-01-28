@@ -131,6 +131,14 @@ public:
     using CompletionCallback = std::function<void(int frame, bool success)>;
 
     /**
+     * @brief Callback function type for periodic status updates
+     *
+     * Called every monitoring iteration (adaptive: 0.5-5s depending on activity).
+     * Useful for refreshing job status without waiting for job completion.
+     */
+    using StatusUpdateCallback = std::function<void()>;
+
+    /**
      * @brief Constructor
      *
      * @param comfyClient Pointer to ComfyUI client (must outlive this object)
@@ -252,6 +260,18 @@ public:
      */
     void setCompletionCallback(CompletionCallback callback);
 
+    /**
+     * @brief Set callback to be invoked periodically for status updates
+     *
+     * Called every polling interval (adaptive: 0.5-5s) from monitoring thread.
+     * Use this to refresh job status information.
+     *
+     * Callback must be thread-safe and fast (non-blocking).
+     *
+     * @param callback Function to call periodically (can be nullptr to disable)
+     */
+    void setStatusUpdateCallback(StatusUpdateCallback callback);
+
     // ========================================================================
     // Monitoring and Statistics
     // ========================================================================
@@ -280,7 +300,7 @@ public:
     /**
      * @brief Get detailed information about all jobs
      *
-     * Useful for debugging or UI display.
+     * Useful for debugging or status reporting.
      *
      * @return Map of frame → AsyncJob for all tracked jobs
      */
@@ -301,9 +321,27 @@ public:
     /**
      * @brief Set polling interval for background monitor thread
      *
+     * NOTE: This sets BOTH fast and slow intervals to the same value.
+     * Use setAdaptivePollingIntervals() for different active/idle rates.
+     *
      * @param seconds Polling interval (default: 1.0 second)
      */
     void setPollingInterval(double seconds);
+
+    /**
+     * @brief Set adaptive polling intervals for active and idle states
+     *
+     * The monitor thread will automatically use:
+     * - fastInterval when there are pending jobs (responsive updates)
+     * - slowInterval when there are no pending jobs (reduce overhead)
+     *
+     * This provides responsive updates when work is happening while
+     * minimizing CPU/network usage when idle.
+     *
+     * @param fastInterval Polling interval when jobs are active (default: 0.5s)
+     * @param slowInterval Polling interval when idle (default: 5.0s)
+     */
+    void setAdaptivePollingIntervals(double fastInterval, double slowInterval);
 
     /**
      * @brief Set maximum age for completed jobs before cleanup
@@ -383,8 +421,14 @@ private:
     std::mutex _callbackMutex;                     // Protects callback
     CompletionCallback _completionCallback;        // User-provided completion handler
 
+    // Status update callback (for periodic job status refresh)
+    std::mutex _statusCallbackMutex;               // Protects status callback
+    StatusUpdateCallback _statusUpdateCallback;    // User-provided status update handler
+
     // Configuration
-    std::atomic<double> _pollingInterval;          // Seconds between polls (default: 1.0)
+    std::atomic<double> _pollingInterval;          // Seconds between polls (default: 1.0) - LEGACY
+    std::atomic<double> _fastPollingInterval;      // Seconds between polls when jobs active (default: 0.5)
+    std::atomic<double> _slowPollingInterval;      // Seconds between polls when idle (default: 5.0)
     std::atomic<double> _jobRetentionTime;         // Seconds to keep completed jobs (default: 300)
     std::atomic<int> _maxPollAttempts;             // Max polls before timeout (default: 600)
 };

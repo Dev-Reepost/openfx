@@ -1,29 +1,96 @@
 {
-  "_meta": {
-    "description": "Default template workflow for AnyComfy OFX plugin",
-    "note": "Add your custom nodes between LoadEXR (node 1) and SaveEXR (node 2). Make sure to maintain the image chain."
-  },
-
-  "1": {
-    "inputs": {
-      "filepath": "${INPUT_PATH}",
-      "linear_to_sRGB": false,
-      "image_load_cap": 0,
-      "skip_first_images": 0,
-      "select_every_nth": 1
+  "last_node_id": 11,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 11,
+      "type": "SaveEXR",
+      "pos": [
+        1318.578125,
+        589.828125
+      ],
+      "size": {
+        "0": 315,
+        "1": 154
+      },
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveEXR"
+      },
+      "widgets_values": [
+        "ComfyUI",
+        true,
+        1,
+        1001,
+        4
+      ]
     },
-    "class_type": "LoadEXR"
+    {
+      "id": 10,
+      "type": "LoadEXR",
+      "pos": [
+        557,
+        570
+      ],
+      "size": {
+        "0": 315,
+        "1": 194
+      },
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "RGB",
+          "type": "IMAGE",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadEXR"
+      },
+      "widgets_values": [
+        "path to directory or .exr file",
+        true,
+        0,
+        0,
+        1
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.9090909090909095,
+      "offset": {
+        "0": 45.67565773710885,
+        "1": 60.67621591132786
+      }
+    }
   },
-
-  "2": {
-    "inputs": {
-      "filename_prefix": "${OUTPUT_PREFIX}",
-      "sRGB_to_linear": false,
-      "version": -1,
-      "start_frame": "${FRAME}",
-      "frame_pad": 4,
-      "images": ["1", 0]
-    },
-    "class_type": "SaveEXR"
-  }
+  "version": 0.4
 }

@@ -18,14 +18,17 @@ AsyncJobManager::AsyncJobManager(Client* comfyClient, std::shared_ptr<spdlog::lo
     , _logger(logger)
     , _shutdown(false)
     , _completionCallback(nullptr)
-    , _pollingInterval(2.0)        // Poll every 2 seconds (reasonable for 30+ second jobs)
+    , _pollingInterval(2.0)        // Poll every 2 seconds (legacy fallback)
+    , _fastPollingInterval(0.5)    // Fast: 0.5s when jobs active (responsive)
+    , _slowPollingInterval(5.0)    // Slow: 5s when idle (reduced overhead)
     , _jobRetentionTime(300.0)     // Keep completed jobs for 5 minutes
     , _maxPollAttempts(300)        // 10 minutes max (300 * 2s)
 {
     if (_logger) {
         _logger->info("========================================");
-        _logger->info("AsyncJobManager: Initializing");
-        _logger->info("  Polling interval: {} seconds", _pollingInterval.load());
+        _logger->info("AsyncJobManager: Initializing with ADAPTIVE polling");
+        _logger->info("  Fast polling (active): {} seconds", _fastPollingInterval.load());
+        _logger->info("  Slow polling (idle):   {} seconds", _slowPollingInterval.load());
         _logger->info("  Max poll attempts: {}", _maxPollAttempts.load());
         _logger->info("  Job retention time: {} seconds", _jobRetentionTime.load());
         _logger->info("========================================");
@@ -323,6 +326,20 @@ void AsyncJobManager::setCompletionCallback(CompletionCallback callback)
     }
 }
 
+void AsyncJobManager::setStatusUpdateCallback(StatusUpdateCallback callback)
+{
+    std::lock_guard<std::mutex> lock(_statusCallbackMutex);
+    _statusUpdateCallback = callback;
+
+    if (_logger) {
+        if (callback) {
+            _logger->info("AsyncJobManager: Status update callback registered (for periodic UI updates)");
+        } else {
+            _logger->info("AsyncJobManager: Status update callback cleared");
+        }
+    }
+}
+
 // ============================================================================
 // Monitoring and Statistics
 // ============================================================================
@@ -399,8 +416,22 @@ std::string AsyncJobManager::getJobError(int frame) const
 
 void AsyncJobManager::setPollingInterval(double seconds)
 {
+    // Set both fast and slow intervals to the same value (legacy behavior)
     _pollingInterval = seconds;
-    if (_logger) _logger->info("AsyncJobManager: Polling interval set to {} seconds", seconds);
+    _fastPollingInterval = seconds;
+    _slowPollingInterval = seconds;
+    if (_logger) _logger->info("AsyncJobManager: Polling interval set to {} seconds (both fast and slow)", seconds);
+}
+
+void AsyncJobManager::setAdaptivePollingIntervals(double fastInterval, double slowInterval)
+{
+    _fastPollingInterval = fastInterval;
+    _slowPollingInterval = slowInterval;
+    if (_logger) {
+        _logger->info("AsyncJobManager: Adaptive polling intervals set");
+        _logger->info("  Fast (active): {} seconds", fastInterval);
+        _logger->info("  Slow (idle):   {} seconds", slowInterval);
+    }
 }
 
 void AsyncJobManager::setJobRetentionTime(double seconds)
@@ -421,18 +452,24 @@ void AsyncJobManager::setMaxPollAttempts(int maxPolls)
 
 void AsyncJobManager::monitorThreadFunc()
 {
-    if (_logger) _logger->info("AsyncJobManager Monitor: Thread started (polling every {} seconds)",
-                               _pollingInterval.load());
+    if (_logger) {
+        _logger->info("AsyncJobManager Monitor: Thread started with ADAPTIVE polling");
+        _logger->info("  Fast interval (active): {} seconds", _fastPollingInterval.load());
+        _logger->info("  Slow interval (idle):   {} seconds", _slowPollingInterval.load());
+    }
 
     int iterationCount = 0;
+    bool wasActive = false;  // Track state transitions for logging
 
     while (!_shutdown) {
+        // Declare jobsToCheck outside try block so it's available for adaptive polling decision
+        std::vector<std::pair<int, AsyncJob>> jobsToCheck;
+
         try {
             auto loopStartTime = std::chrono::steady_clock::now();
             ++iterationCount;
 
             // Get copy of jobs to check (minimize lock time)
-            std::vector<std::pair<int, AsyncJob>> jobsToCheck;
             {
                 std::lock_guard<std::mutex> lock(_jobsMutex);
 
@@ -532,15 +569,43 @@ void AsyncJobManager::monitorThreadFunc()
             // Cleanup old jobs periodically
             cleanupOldJobs();
 
+            // Invoke status update callback for periodic UI refresh
+            {
+                std::lock_guard<std::mutex> lock(_statusCallbackMutex);
+                if (_statusUpdateCallback) {
+                    try {
+                        _statusUpdateCallback();
+                    } catch (const std::exception& e) {
+                        if (_logger) {
+                            _logger->error("AsyncJobManager Monitor: Status update callback exception: {}", e.what());
+                        }
+                    }
+                }
+            }
+
         } catch (const std::exception& e) {
             if (_logger) {
                 _logger->error("AsyncJobManager Monitor: Exception in monitor loop: {}", e.what());
             }
         }
 
-        // Sleep before next poll
+        // Sleep before next poll - ADAPTIVE based on job activity
         if (!_shutdown) {
-            auto sleepDuration = std::chrono::duration<double>(_pollingInterval.load());
+            // Determine polling interval based on job activity
+            bool hasActiveJobs = !jobsToCheck.empty();
+            double interval = hasActiveJobs ? _fastPollingInterval.load() : _slowPollingInterval.load();
+
+            // Log state transitions (active ↔ idle)
+            if (_logger && hasActiveJobs != wasActive) {
+                if (hasActiveJobs) {
+                    _logger->info("Monitor: Switching to FAST polling ({} s) - jobs are active", interval);
+                } else {
+                    _logger->info("Monitor: Switching to SLOW polling ({} s) - no jobs pending", interval);
+                }
+                wasActive = hasActiveJobs;
+            }
+
+            auto sleepDuration = std::chrono::duration<double>(interval);
             std::this_thread::sleep_for(sleepDuration);
         }
     }

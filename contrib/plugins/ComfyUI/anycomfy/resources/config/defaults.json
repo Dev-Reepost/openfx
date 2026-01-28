@@ -1,0 +1,20 @@
+{
+  "server": {
+    "serverAddress": "192.168.1.211",
+    "serverPort": 8188,
+    "macMountPath": "/Volumes/silo2/002_COMFYUI",
+    "winMountPath": "\\\\192.168.1.110\\silo2\\002_COMFYUI",
+    "comfyUIInputDir": "/Volumes/silo2/002_COMFYUI/in"
+  },
+  "controls": {
+    "enableProcessing": false,
+    "enableCache": true,
+    "timeout": 300,
+    "asyncMode": 1,
+    "placeholderMode": 1
+  },
+  "project": {
+    "workflowName": "my_vfx",
+    "outputVersion": "v001"
+  }
+}
