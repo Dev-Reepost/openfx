@@ -12,6 +12,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -36,9 +37,13 @@ namespace ComfyUI {
  */
 class BasePlugin : public OFX::ImageEffect {
 protected:
-    // Clips
-    OFX::Clip *_srcClip;
-    OFX::Clip *_dstClip;
+    // Clips - Primary input and output
+    OFX::Clip *_srcClip;      // Primary input (Source) - required
+    OFX::Clip *_dstClip;      // Output
+
+    // Optional secondary input clips for multi-input workflows
+    OFX::Clip *_src2Clip;     // Secondary input (Source2) - optional
+    OFX::Clip *_src3Clip;     // Tertiary input (Source3) - optional
 
     // Common parameters
     OFX::BooleanParam *_enableProcessing;      // Master enable/disable for ComfyUI processing
@@ -90,7 +95,11 @@ public:
                                       OfxRectD &rod) override;
 
     // Template method pattern - derived classes implement these
-    virtual json buildWorkflow(int frame, const std::string& inputPath) = 0;
+    // inputPaths maps input identifiers to file paths:
+    //   "InputA" -> "/path/to/input.0001.exr"      (Source clip)
+    //   "InputB" -> "/path/to/input_B.0001.exr"    (Source2 clip, if connected)
+    //   "InputC" -> "/path/to/input_C.0001.exr"    (Source3 clip, if connected)
+    virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) = 0;
     virtual std::vector<std::string> getRequiredModels() = 0;
 
     // Override in derived classes to control basename generation
@@ -101,20 +110,28 @@ public:
 protected:
     // Helper methods - Blocking workflow execution
     void executeWorkflow(const OFX::RenderArguments &args);
-    std::string writeInputImage(OFX::Image* img, int frame);
+    std::string writeInputImage(OFX::Image* img, int frame, const std::string& suffix = "");
     void renderPassthrough(const OFX::RenderArguments &args);  // Fast passthrough for proxy renders
     void copyPixelData(const OFX::Image* src, OFX::Image* dst);
     std::string parseOutputPath(const json& history, int frame);
     std::string convertPathForComfyUI(const std::string& localPath);
     std::string constructExpectedOutputPath(int frame);
-    std::string constructInputPath(int frame);  // Construct path to input EXR file
-    std::string getEffectiveBasename();  // Get basename (auto-generated or manual)
+    std::string constructInputPath(int frame, const std::string& suffix = "");  // Construct path to input EXR file
+    virtual std::string getEffectiveBasename();  // Get basename (auto-generated or manual) - virtual to allow custom naming schemes
+
+    // Multi-input support
+    // Writes all connected input clips to EXR files, returns map of input ID -> path
+    // InputA = Source (primary), InputB = Source2, InputC = Source3
+    std::map<std::string, std::string> writeInputImages(int frame);
+
+    // Returns count of connected input clips (1-3)
+    int getConnectedInputCount() const;
 
     // Workflow file management
     std::string getBundleResourcePath(const std::string& resourceName);
     std::string resolveWorkflowPath(const std::string& workflowPath);
     json loadWorkflowFromFile(const std::string& filepath);
-    json customizeWorkflow(const json& baseWorkflow, int frame, const std::string& inputPath);
+    json customizeWorkflow(const json& baseWorkflow, int frame, const std::map<std::string, std::string>& inputPaths);
 
     // Async rendering helper methods
     void renderBlocking(const OFX::RenderArguments &args);

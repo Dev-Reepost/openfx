@@ -199,22 +199,23 @@ public:
      * This method accepts image data directly and performs ALL I/O in a background thread:
      * 1. Copies image data (cheap, in-memory)
      * 2. Returns immediately
-     * 3. Background thread: writes input EXR file
-     * 4. Background thread: builds workflow with input path
+     * 3. Background thread: writes input EXR file(s)
+     * 4. Background thread: builds workflow with input paths
      * 5. Background thread: submits to ComfyUI
      * 6. Monitor thread: polls for completion
      *
      * This ensures renderAsync() returns INSTANTLY with no blocking I/O.
      *
      * @param frame Frame number being rendered
-     * @param imageData Source image data (will be copied to avoid lifetime issues)
-     * @param inputPath Path where input EXR will be written (in background)
+     * @param imageDataMap Map of input ID to source image data (e.g., "InputA" -> ImageData)
+     *                     Will be copied to avoid lifetime issues
+     * @param inputPathMap Map of input ID to file path (e.g., "InputA" -> "/path/to/input.exr")
      * @param outputPath Expected path where output file will be written
      * @param basePlugin Pointer to BasePlugin (for buildWorkflow callback)
      */
     void submitJobAsync(int frame,
-                       const ImageData& imageData,
-                       const std::string& inputPath,
+                       const std::map<std::string, ImageData>& imageDataMap,
+                       const std::map<std::string, std::string>& inputPathMap,
                        const std::string& outputPath,
                        BasePlugin* basePlugin);
 

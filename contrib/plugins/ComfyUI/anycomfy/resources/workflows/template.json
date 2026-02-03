@@ -68,11 +68,12 @@
           "shape": 3
         }
       ],
+      "title": "InputA",
       "properties": {
         "Node name for S&R": "LoadEXR"
       },
       "widgets_values": [
-        "path to directory or .exr file",
+        "InputA - primary input from OFX Source clip",
         true,
         0,
         0,
@@ -81,7 +82,26 @@
     }
   ],
   "links": [],
-  "groups": [],
+  "groups": [
+    {
+      "title": "OFX Input - Source Clip",
+      "bounding": [500, 520, 420, 280],
+      "color": "#3f8e3f",
+      "font_size": 24
+    },
+    {
+      "title": "Processing - Add your nodes here",
+      "bounding": [960, 480, 280, 360],
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "OFX Output",
+      "bounding": [1270, 540, 420, 260],
+      "color": "#8c4646",
+      "font_size": 24
+    }
+  ],
   "config": {},
   "extra": {
     "ds": {

@@ -32,7 +32,7 @@ public:
     virtual ~SAMSegmentationPlugin();
 
     // Implement abstract methods from BasePlugin
-    virtual json buildWorkflow(int frame, const std::string& inputPath) override;
+    virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) override;
     virtual std::vector<std::string> getRequiredModels() override;
 
     // OFX lifecycle

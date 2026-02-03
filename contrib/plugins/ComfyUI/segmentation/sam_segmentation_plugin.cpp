@@ -81,9 +81,23 @@ std::string SAMSegmentationPlugin::getDinoModelName() const
     }
 }
 
-json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPath)
+json SAMSegmentationPlugin::buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths)
 {
     if (_logger) _logger->info("Building SAM segmentation workflow for frame {}", frame);
+
+    // SAM uses single input - extract InputA from the map
+    std::string inputPath;
+    auto it = inputPaths.find("InputA");
+    if (it != inputPaths.end()) {
+        inputPath = it->second;
+    } else if (!inputPaths.empty()) {
+        // Fallback to first available input
+        inputPath = inputPaths.begin()->second;
+    } else {
+        throw std::runtime_error("No input path provided for SAM workflow");
+    }
+
+    if (_logger) _logger->info("Using input path: {}", inputPath);
 
     // Try to load workflow from file first
     std::string workflowPath;
@@ -101,7 +115,7 @@ json SAMSegmentationPlugin::buildWorkflow(int frame, const std::string& inputPat
                 json baseWorkflow = loadWorkflowFromFile(resolvedPath);
 
                 // Customize with parameters and paths
-                json customized = customizeWorkflow(baseWorkflow, frame, inputPath);
+                json customized = customizeWorkflow(baseWorkflow, frame, inputPaths);
 
                 // Add SAM-specific parameter customization
                 json final = customizeWorkflowWithParams(customized, frame);

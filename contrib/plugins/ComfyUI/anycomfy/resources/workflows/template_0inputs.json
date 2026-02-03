@@ -1,0 +1,64 @@
+{
+  "last_node_id": 10,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 10,
+      "type": "SaveEXR",
+      "pos": [
+        800,
+        400
+      ],
+      "size": {
+        "0": 315,
+        "1": 154
+      },
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveEXR"
+      },
+      "widgets_values": [
+        "ComfyUI",
+        true,
+        1,
+        1001,
+        4
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [
+    {
+      "title": "Processing - Add your generator nodes here",
+      "bounding": [100, 100, 600, 500],
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "OFX Output",
+      "bounding": [750, 350, 420, 260],
+      "color": "#8c4646",
+      "font_size": 24
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.9,
+      "offset": {
+        "0": 50,
+        "1": 50
+      }
+    }
+  },
+  "version": 0.4
+}

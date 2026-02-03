@@ -7,6 +7,8 @@
 #include <fstream>
 #include <ctime>
 #include <cctype>
+#include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <thread>
 #include <chrono>
@@ -34,12 +36,14 @@ AnyComfyPlugin::AnyComfyPlugin(OfxImageEffectHandle handle)
     , _openWorkflow(nullptr)
     , _comfyUIInputDir(nullptr)
     , _newWorkflowName(nullptr)
+    , _newWorkflowInputCount(nullptr)
 {
     // Fetch AnyComfy-specific parameters
     _createNewWorkflow = fetchPushButtonParam("createNewWorkflow");
     _openWorkflow = fetchPushButtonParam("openWorkflow");
     _comfyUIInputDir = fetchStringParam("comfyUIInputDir");
     _newWorkflowName = fetchStringParam("newWorkflowName");
+    _newWorkflowInputCount = fetchChoiceParam("newWorkflowInputCount");
 }
 
 AnyComfyPlugin::~AnyComfyPlugin()
@@ -112,9 +116,9 @@ void AnyComfyPlugin::changedParam(const OFX::InstanceChangedArgs &args,
     }
 }
 
-json AnyComfyPlugin::buildWorkflow(int frame, const std::string& inputPath)
+json AnyComfyPlugin::buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths)
 {
-    if (_logger) _logger->info("Building generic workflow for frame {}", frame);
+    if (_logger) _logger->info("Building generic workflow for frame {} with {} input(s)", frame, inputPaths.size());
 
     // Load workflow from file (should be API format: workflows/<name>/<name>_api.json)
     std::string workflowFilePath;
@@ -181,8 +185,93 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::string& inputPath)
     // Load workflow from file
     json baseWorkflow = loadWorkflowFromFile(resolvedPath.string());
 
+    // ========================================================================
+    // WORKFLOW ANALYSIS: Log workflow structure for debugging/validation
+    // ========================================================================
+    if (_logger) {
+        _logger->info("=== WORKFLOW ANALYSIS ===");
+        _logger->info("Workflow file: {}", resolvedPath.string());
+        _logger->info("Format: {}", usingApiFormat ? "API" : "UI");
+
+        // Count nodes by type
+        std::map<std::string, int> nodeTypeCounts;
+        int totalNodes = 0;
+        int loadEXRCount = 0;
+        int saveEXRCount = 0;
+
+        if (baseWorkflow.is_object()) {
+            if (baseWorkflow.contains("nodes") && baseWorkflow["nodes"].is_array()) {
+                // UI format
+                totalNodes = baseWorkflow["nodes"].size();
+                for (const auto& node : baseWorkflow["nodes"]) {
+                    if (node.contains("type")) {
+                        std::string nodeType = node["type"];
+                        nodeTypeCounts[nodeType]++;
+                        if (nodeType == "LoadEXR") loadEXRCount++;
+                        if (nodeType == "SaveEXR") saveEXRCount++;
+                    }
+                }
+            } else {
+                // API format
+                for (const auto& [nodeId, nodeData] : baseWorkflow.items()) {
+                    if (nodeId == "_meta" || nodeId.rfind("_", 0) == 0) continue;
+                    if (!nodeData.is_object() || !nodeData.contains("class_type")) continue;
+
+                    totalNodes++;
+                    std::string classType = nodeData["class_type"];
+                    nodeTypeCounts[classType]++;
+                    if (classType == "LoadEXR") loadEXRCount++;
+                    if (classType == "SaveEXR") saveEXRCount++;
+                }
+            }
+        }
+
+        _logger->info("Total nodes: {}", totalNodes);
+        _logger->info("LoadEXR nodes: {} (inputs from OFX)", loadEXRCount);
+        _logger->info("SaveEXR nodes: {} (outputs to OFX)", saveEXRCount);
+
+        // Log all node types
+        _logger->info("Node types in workflow:");
+        for (const auto& [nodeType, count] : nodeTypeCounts) {
+            _logger->info("  - {}: {}", nodeType, count);
+        }
+
+        // Validation warnings
+        _logger->info("--- Validation ---");
+        _logger->info("Connected OFX inputs: {} (InputA={}, InputB={}, InputC={})",
+                     inputPaths.size(),
+                     inputPaths.count("InputA") ? "yes" : "no",
+                     inputPaths.count("InputB") ? "yes" : "no",
+                     inputPaths.count("InputC") ? "yes" : "no");
+
+        if (loadEXRCount == 0 && inputPaths.size() > 0) {
+            _logger->warn("⚠ GENERATOR WORKFLOW: No LoadEXR nodes but {} OFX input(s) connected", inputPaths.size());
+            _logger->warn("  Input images will be written but not used by workflow");
+        } else if (loadEXRCount < static_cast<int>(inputPaths.size())) {
+            _logger->warn("⚠ INPUT MISMATCH: {} LoadEXR nodes but {} OFX inputs connected", loadEXRCount, inputPaths.size());
+            _logger->warn("  Some connected inputs will not be used");
+        } else if (loadEXRCount > static_cast<int>(inputPaths.size())) {
+            _logger->warn("⚠ INPUT MISMATCH: {} LoadEXR nodes but only {} OFX input(s) connected", loadEXRCount, inputPaths.size());
+            _logger->warn("  Some LoadEXR nodes will have no input path");
+        } else if (loadEXRCount == static_cast<int>(inputPaths.size())) {
+            _logger->info("✓ Input count matches: {} LoadEXR node(s) = {} OFX input(s)", loadEXRCount, inputPaths.size());
+        }
+
+        if (saveEXRCount == 0) {
+            _logger->error("✗ NO OUTPUT: Workflow has no SaveEXR nodes!");
+            _logger->error("  Workflow will not produce any output image");
+        } else if (saveEXRCount > 1) {
+            _logger->warn("⚠ MULTIPLE OUTPUTS: Workflow has {} SaveEXR nodes", saveEXRCount);
+            _logger->warn("  Only one output will be used by OFX plugin");
+        } else {
+            _logger->info("✓ Single output: 1 SaveEXR node");
+        }
+
+        _logger->info("=== END WORKFLOW ANALYSIS ===");
+    }
+
     // First, try template variable replacement (for templated workflows)
-    json customized = customizeWorkflow(baseWorkflow, frame, inputPath);
+    json customized = customizeWorkflow(baseWorkflow, frame, inputPaths);
 
     // Convert UI format to API format BEFORE injecting paths
     // This is critical because injectPathsIntoWorkflow expects API format
@@ -207,7 +296,7 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::string& inputPath)
     outputPrefix << mountPath << "/out/" << project << "/" << workflowName
                  << "/" << version << "/" << basename;
 
-    json final = injectPathsIntoWorkflow(customized, frame, inputPath, outputPrefix.str());
+    json final = injectPathsIntoWorkflow(customized, frame, inputPaths, outputPrefix.str());
 
     if (_logger) _logger->info("Successfully loaded and customized workflow from file");
     return final;
@@ -291,15 +380,68 @@ std::vector<std::string> AnyComfyPlugin::scanWorkflowFiles()
 
 std::string AnyComfyPlugin::generateUniqueWorkflowName()
 {
-    // Use instance name to create unique workflow name
-    // Format: anycomfy_<instance>_<timestamp>.json
+    // Generate unique workflow name using instance name and timestamp
+    // Format: <instanceName>_<timestamp>
+    // Note: .json extension is removed here (added later during workflow creation)
 
     // Get current timestamp
     auto now = std::time(nullptr);
     std::ostringstream oss;
-    oss << "anycomfy_" << _instanceName << "_" << now << ".json";
+
+    // Use instance name if available, otherwise use "workflow"
+    if (!_instanceName.empty()) {
+        oss << _instanceName << "_" << now;
+    } else {
+        oss << "workflow_" << now;
+    }
 
     return oss.str();
+}
+
+std::string AnyComfyPlugin::getEffectiveBasename()
+{
+    // Override base class to avoid redundant instance name in basename
+    // Since workflow name already contains instance identifier (e.g., "AnyComfy_1769610105"),
+    // we generate: {project}_{workflow} instead of {project}_{workflow}_{instance}
+    // This avoids: "testinputs_AnyComfy_1769610105_AnyComfy" → "testinputs_AnyComfy_1769610105"
+
+    std::string project;
+    _projectName->getValue(project);
+
+    std::string workflow;
+    _workflowName->getValue(workflow);
+
+    // Sanitize workflow name: replace non-alphanumeric characters with underscores
+    std::string sanitizedWorkflow = workflow;
+    for (char& c : sanitizedWorkflow) {
+        if (!std::isalnum(static_cast<unsigned char>(c))) {
+            c = '_';
+        }
+    }
+
+    // Remove leading/trailing underscores
+    while (!sanitizedWorkflow.empty() && sanitizedWorkflow.front() == '_') {
+        sanitizedWorkflow.erase(0, 1);
+    }
+    while (!sanitizedWorkflow.empty() && sanitizedWorkflow.back() == '_') {
+        sanitizedWorkflow.pop_back();
+    }
+
+    // Generate basename: {project}_{workflow} (no instance name)
+    std::string generatedBasename;
+    if (!sanitizedWorkflow.empty()) {
+        generatedBasename = project + "_" + sanitizedWorkflow;
+    } else {
+        // Fallback if no workflow name
+        generatedBasename = project;
+    }
+
+    if (_logger) {
+        _logger->info("Auto-generated AnyComfy basename: {} (project='{}', workflow='{}')",
+                     generatedBasename, project, sanitizedWorkflow);
+    }
+
+    return generatedBasename;
 }
 
 void AnyComfyPlugin::createTemplateWorkflow()
@@ -354,16 +496,44 @@ void AnyComfyPlugin::createTemplateWorkflow()
     // Workflow file path: <COMFYUI_INPUT_PATH>/workflows/<WORKFLOW_NAME>/<WORKFLOW_NAME>.json
     fs::path workflowFilePath = workflowDir / (workflowName + ".json");
 
+    // Get selected input count from choice parameter
+    int inputCount = 1;  // Default to 1 input (standard filter workflow)
+    if (_newWorkflowInputCount) {
+        _newWorkflowInputCount->getValue(inputCount);
+        if (_logger) _logger->info("User selected {} input(s) for new workflow", inputCount);
+    }
+
+    // Select appropriate template based on input count
+    std::string templateFilename;
+    switch (inputCount) {
+        case 0:
+            templateFilename = "workflows/template_0inputs.json";
+            break;
+        case 1:
+            templateFilename = "workflows/template.json";  // Standard 1-input template
+            break;
+        case 2:
+            templateFilename = "workflows/template_2inputs.json";
+            break;
+        case 3:
+            templateFilename = "workflows/template_3inputs.json";
+            break;
+        default:
+            templateFilename = "workflows/template.json";
+            if (_logger) _logger->warn("Invalid input count {}, defaulting to 1-input template", inputCount);
+            break;
+    }
+
     // Load template workflow from bundle resources
     json workflow;
-    std::string templatePath = getBundleResourcePath("workflows/template.json");
+    std::string templatePath = getBundleResourcePath(templateFilename);
 
     if (templatePath.empty() || !fs::exists(templatePath)) {
         if (_logger) _logger->error("Template file not found at: {}", templatePath);
-        throw std::runtime_error("Template workflow file not found in bundle resources");
+        throw std::runtime_error("Template workflow file not found in bundle resources: " + templateFilename);
     }
 
-    if (_logger) _logger->info("Loading template from: {}", templatePath);
+    if (_logger) _logger->info("Loading {}-input template from: {}", inputCount, templatePath);
 
     try {
         std::ifstream templateFile(templatePath);
@@ -647,117 +817,303 @@ void AnyComfyPlugin::openComfyUIInBrowser(const std::string& workflowName)
 }
 
 json AnyComfyPlugin::injectPathsIntoWorkflow(const json& workflow, int frame,
-                                              const std::string& inputPath,
+                                              const std::map<std::string, std::string>& inputPaths,
                                               const std::string& outputPrefix)
 {
-    if (_logger) _logger->info("Injecting paths into workflow nodes (smart injection for non-templated workflows)");
+    if (_logger) _logger->info("=== INJECTING PATHS INTO WORKFLOW ===");
+    if (_logger) _logger->info("Available OFX inputs: {}", inputPaths.size());
+    for (const auto& [inputId, path] : inputPaths) {
+        if (_logger) _logger->info("  {} -> {}", inputId, path);
+    }
 
     // Create a mutable copy of the workflow
     json modifiedWorkflow = workflow;
 
-    // Convert paths to ComfyUI format (Windows paths if needed)
-    // IMPORTANT: We need the RAW Windows path WITHOUT manual JSON escaping
-    // because nlohmann_json will automatically escape backslashes when serializing
+    // Get mount path info for path conversion
     std::string clientMount, serverMount;
     _macMountPath->getValue(clientMount);
     _winMountPath->getValue(serverMount);
 
-    // Convert input path (replace mount + forward slashes → backslashes)
-    std::string comfyInputPath = inputPath;
-    if (comfyInputPath.find(clientMount) == 0) {
-        comfyInputPath.replace(0, clientMount.length(), serverMount);
-    }
-    std::replace(comfyInputPath.begin(), comfyInputPath.end(), '/', '\\');
+    // Helper lambda to convert paths to ComfyUI format (Windows paths)
+    auto convertPath = [&](const std::string& path) -> std::string {
+        std::string converted = path;
+        if (converted.find(clientMount) == 0) {
+            converted.replace(0, clientMount.length(), serverMount);
+        }
+        std::replace(converted.begin(), converted.end(), '/', '\\');
+        return converted;
+    };
 
-    // Convert output prefix (replace mount + forward slashes → backslashes)
-    std::string comfyOutputPrefix = outputPrefix;
-    if (comfyOutputPrefix.find(clientMount) == 0) {
-        comfyOutputPrefix.replace(0, clientMount.length(), serverMount);
-    }
-    std::replace(comfyOutputPrefix.begin(), comfyOutputPrefix.end(), '/', '\\');
+    // Convert output prefix
+    std::string comfyOutputPrefix = convertPath(outputPrefix);
 
     if (_logger) {
-        _logger->info("Injecting input path (raw Windows): {}", comfyInputPath);
-        _logger->info("Injecting output prefix (raw Windows): {}", comfyOutputPrefix);
-        _logger->info("Injecting frame: {}", frame);
-        _logger->info("(nlohmann_json will auto-escape backslashes in JSON output)");
+        _logger->info("Output prefix (Windows format): {}", comfyOutputPrefix);
     }
 
-    int loadEXRCount = 0;
-    int saveEXRCount = 0;
+    // ========================================================================
+    // Step 1: Collect all LoadEXR nodes with their positions (for sorting)
+    // ========================================================================
+    struct LoadEXRNode {
+        std::string nodeId;
+        std::string title;      // From _meta.title or properties
+        double yPos;            // Y position for vertical sorting (topmost first)
+        double xPos;            // X position as secondary sort
+        int numericId;          // Numeric node ID as fallback for sorting
+    };
 
-    // Iterate through all nodes in the workflow
+    std::vector<LoadEXRNode> loadEXRNodes;
+
     if (modifiedWorkflow.is_object()) {
         for (auto& [nodeId, nodeData] : modifiedWorkflow.items()) {
-            // Skip non-object nodes or metadata
             if (!nodeData.is_object()) continue;
             if (nodeId == "_meta" || nodeId.rfind("_", 0) == 0) continue;
-
-            // Check if node has class_type
             if (!nodeData.contains("class_type")) continue;
 
             std::string classType = nodeData["class_type"];
 
-            // Find and modify LoadEXR nodes
             if (classType == "LoadEXR") {
-                if (_logger) _logger->info("Found LoadEXR node: {}", nodeId);
+                LoadEXRNode node;
+                node.nodeId = nodeId;
+                node.yPos = 0.0;
+                node.xPos = 0.0;
+                node.numericId = 0;
 
-                // Ensure inputs object exists
-                if (!nodeData.contains("inputs")) {
-                    nodeData["inputs"] = json::object();
+                // Try to parse numeric ID for fallback sorting
+                try {
+                    node.numericId = std::stoi(nodeId);
+                } catch (...) {}
+
+                // Try to get title from _meta.title
+                if (nodeData.contains("_meta") && nodeData["_meta"].contains("title")) {
+                    node.title = nodeData["_meta"]["title"];
                 }
 
-                // Inject the input path
-                nodeData["inputs"]["filepath"] = comfyInputPath;
-                loadEXRCount++;
+                // Try to get position from pos array (UI format embedded in API)
+                // pos[0] = X coordinate, pos[1] = Y coordinate
+                if (nodeData.contains("pos") && nodeData["pos"].is_array() && nodeData["pos"].size() >= 2) {
+                    node.xPos = nodeData["pos"][0].get<double>();
+                    node.yPos = nodeData["pos"][1].get<double>();  // Y coordinate (vertical position)
+                }
 
-                if (_logger) _logger->info("  → Injected filepath: {}", comfyInputPath);
+                loadEXRNodes.push_back(node);
+
+                if (_logger) {
+                    _logger->info("Found LoadEXR node: id={}, title='{}', pos=({}, {}), numericId={}",
+                                 node.nodeId, node.title, node.xPos, node.yPos, node.numericId);
+                }
+            }
+        }
+    }
+
+    if (_logger) _logger->info("Total LoadEXR nodes found: {}", loadEXRNodes.size());
+
+    // ========================================================================
+    // Step 2: Sort LoadEXR nodes by VERTICAL position (topmost first, then by X, then by ID)
+    // ========================================================================
+    if (_logger) _logger->info("Sorting LoadEXR nodes by vertical position (top-to-bottom)...");
+
+    std::sort(loadEXRNodes.begin(), loadEXRNodes.end(),
+              [](const LoadEXRNode& a, const LoadEXRNode& b) {
+                  // Primary: sort by Y position (topmost first = smallest Y value)
+                  if (std::abs(a.yPos - b.yPos) > 10.0) {  // 10px threshold for "same row"
+                      return a.yPos < b.yPos;
+                  }
+                  // Secondary: sort by X position (leftmost first if same Y)
+                  if (std::abs(a.xPos - b.xPos) > 10.0) {  // 10px threshold for "same column"
+                      return a.xPos < b.xPos;
+                  }
+                  // Tertiary: sort by numeric ID (lower first)
+                  return a.numericId < b.numericId;
+              });
+
+    if (_logger && !loadEXRNodes.empty()) {
+        _logger->info("LoadEXR nodes sorted (top-to-bottom):");
+        for (size_t i = 0; i < loadEXRNodes.size(); ++i) {
+            _logger->info("  [{}] id={}, title='{}', pos=({:.0f}, {:.0f}) [Y={:.0f}=vertical]",
+                         i, loadEXRNodes[i].nodeId, loadEXRNodes[i].title,
+                         loadEXRNodes[i].xPos, loadEXRNodes[i].yPos, loadEXRNodes[i].yPos);
+        }
+    }
+
+    // ========================================================================
+    // Step 3: Map LoadEXR nodes to input IDs (InputA, InputB, InputC)
+    // ========================================================================
+    // Priority:
+    // 1. Match by title (if title contains "InputA", "InputB", etc.)
+    // 2. Fall back to position order (top = InputA, 2nd from top = InputB, 3rd = InputC)
+
+    if (_logger) _logger->info("--- MAPPING LoadEXR nodes to OFX inputs ---");
+
+    const std::vector<std::string> inputOrder = {"InputA", "InputB", "InputC"};
+    std::map<std::string, std::string> nodeIdToInputId;  // nodeId -> inputId
+
+    // First pass: try to match by title
+    if (_logger) _logger->info("Pass 1: Matching by title/name...");
+    for (const auto& node : loadEXRNodes) {
+        std::string titleUpper = node.title;
+        std::transform(titleUpper.begin(), titleUpper.end(), titleUpper.begin(), ::toupper);
+
+        for (const auto& inputId : inputOrder) {
+            std::string inputIdUpper = inputId;
+            std::transform(inputIdUpper.begin(), inputIdUpper.end(), inputIdUpper.begin(), ::toupper);
+
+            // Check for various naming conventions
+            if (titleUpper.find(inputIdUpper) != std::string::npos ||
+                (inputId == "InputA" && (titleUpper.find("INPUT1") != std::string::npos ||
+                                         titleUpper.find("SOURCE") != std::string::npos ||
+                                         titleUpper.find("MAIN") != std::string::npos)) ||
+                (inputId == "InputB" && (titleUpper.find("INPUT2") != std::string::npos ||
+                                         titleUpper.find("SECONDARY") != std::string::npos ||
+                                         titleUpper.find("BACKGROUND") != std::string::npos)) ||
+                (inputId == "InputC" && (titleUpper.find("INPUT3") != std::string::npos ||
+                                         titleUpper.find("TERTIARY") != std::string::npos ||
+                                         titleUpper.find("FOREGROUND") != std::string::npos))) {
+                // Only assign if not already assigned and input exists
+                if (nodeIdToInputId.find(node.nodeId) == nodeIdToInputId.end() &&
+                    inputPaths.count(inputId) > 0) {
+                    nodeIdToInputId[node.nodeId] = inputId;
+                    if (_logger) {
+                        _logger->info("Matched LoadEXR '{}' (title='{}') to {} by title",
+                                     node.nodeId, node.title, inputId);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Second pass: assign remaining nodes by position order (top-to-bottom)
+    if (_logger) _logger->info("Pass 2: Assigning by position order (top-to-bottom)...");
+    size_t inputIndex = 0;
+    for (const auto& node : loadEXRNodes) {
+        if (nodeIdToInputId.find(node.nodeId) == nodeIdToInputId.end()) {
+            // Find next available input
+            while (inputIndex < inputOrder.size()) {
+                const std::string& inputId = inputOrder[inputIndex];
+
+                // Check if this input exists and isn't already used
+                if (inputPaths.count(inputId) > 0) {
+                    bool alreadyUsed = false;
+                    for (const auto& [nid, iid] : nodeIdToInputId) {
+                        if (iid == inputId) {
+                            alreadyUsed = true;
+                            break;
+                        }
+                    }
+
+                    if (!alreadyUsed) {
+                        nodeIdToInputId[node.nodeId] = inputId;
+                        if (_logger) {
+                            _logger->info("✓ Assigned LoadEXR '{}' (title='{}', Y={:.0f}) to {} by vertical position",
+                                         node.nodeId, node.title, node.yPos, inputId);
+                        }
+                        inputIndex++;
+                        break;
+                    }
+                }
+                inputIndex++;
             }
 
-            // Find and modify SaveEXR nodes
-            if (classType == "SaveEXR") {
-                if (_logger) _logger->info("Found SaveEXR node: {}", nodeId);
+            // If we've run out of inputs, warn
+            if (nodeIdToInputId.find(node.nodeId) == nodeIdToInputId.end()) {
+                if (_logger) {
+                    _logger->warn("✗ LoadEXR node '{}' (title='{}') has no corresponding OFX input clip!",
+                                 node.nodeId, node.title);
+                }
+            }
+        }
+    }
 
-                // Ensure inputs object exists
+    // Summary of mapping
+    if (_logger) {
+        _logger->info("--- MAPPING SUMMARY ---");
+        _logger->info("Total mappings: {}", nodeIdToInputId.size());
+        for (const auto& [nodeId, inputId] : nodeIdToInputId) {
+            _logger->info("  LoadEXR node '{}' → OFX {}", nodeId, inputId);
+        }
+    }
+
+    // ========================================================================
+    // Step 4: Inject paths into LoadEXR nodes
+    // ========================================================================
+    int loadEXRCount = 0;
+    int saveEXRCount = 0;
+
+    if (modifiedWorkflow.is_object()) {
+        for (auto& [nodeId, nodeData] : modifiedWorkflow.items()) {
+            if (!nodeData.is_object()) continue;
+            if (nodeId == "_meta" || nodeId.rfind("_", 0) == 0) continue;
+            if (!nodeData.contains("class_type")) continue;
+
+            std::string classType = nodeData["class_type"];
+
+            // Inject path into LoadEXR nodes
+            if (classType == "LoadEXR") {
                 if (!nodeData.contains("inputs")) {
                     nodeData["inputs"] = json::object();
                 }
 
-                // Inject the output prefix and frame
+                // Find the input ID for this node
+                auto it = nodeIdToInputId.find(nodeId);
+                if (it != nodeIdToInputId.end()) {
+                    const std::string& inputId = it->second;
+                    auto pathIt = inputPaths.find(inputId);
+                    if (pathIt != inputPaths.end()) {
+                        std::string comfyInputPath = convertPath(pathIt->second);
+                        nodeData["inputs"]["filepath"] = comfyInputPath;
+                        loadEXRCount++;
+
+                        if (_logger) {
+                            _logger->info("LoadEXR '{}' <- {} : {}", nodeId, inputId, comfyInputPath);
+                        }
+                    }
+                }
+            }
+
+            // Inject path into SaveEXR nodes (same as before)
+            if (classType == "SaveEXR") {
+                if (!nodeData.contains("inputs")) {
+                    nodeData["inputs"] = json::object();
+                }
+
                 nodeData["inputs"]["filename_prefix"] = comfyOutputPrefix;
                 nodeData["inputs"]["start_frame"] = frame;
-                // CRITICAL: Set version to -1 to prevent adding version suffix to filename
-                // The version is already in the directory path (e.g., .../v001/)
-                // so we don't want it duplicated in the filename
                 nodeData["inputs"]["version"] = -1;
                 saveEXRCount++;
 
                 if (_logger) {
-                    _logger->info("  → Injected filename_prefix: {}", comfyOutputPrefix);
-                    _logger->info("  → Injected start_frame: {}", frame);
-                    _logger->info("  → Injected version: -1 (no filename suffix)");
+                    _logger->info("SaveEXR '{}' <- prefix: {}, frame: {}", nodeId, comfyOutputPrefix, frame);
                 }
             }
         }
     }
 
     if (_logger) {
-        _logger->info("Smart injection complete: {} LoadEXR nodes, {} SaveEXR nodes modified",
+        _logger->info("Path injection complete: {} LoadEXR nodes, {} SaveEXR nodes modified",
                       loadEXRCount, saveEXRCount);
     }
 
-    // Warn if no nodes were found (workflow might be invalid for AnyComfy)
-    if (loadEXRCount == 0) {
-        if (_logger) _logger->warn("No LoadEXR nodes found in workflow! Workflow may not have input.");
+    // Warnings for mismatches
+    if (loadEXRCount == 0 && inputPaths.size() > 0) {
+        if (_logger) _logger->warn("No LoadEXR nodes found but {} input(s) provided! Workflow may be a generator.",
+                                   inputPaths.size());
+    }
+    if (loadEXRCount < static_cast<int>(inputPaths.size())) {
+        if (_logger) _logger->warn("Workflow has {} LoadEXR nodes but {} inputs connected. Some inputs unused.",
+                                   loadEXRCount, inputPaths.size());
+    }
+    if (loadEXRCount > static_cast<int>(inputPaths.size())) {
+        if (_logger) _logger->warn("Workflow has {} LoadEXR nodes but only {} inputs connected. Some nodes have no input.",
+                                   loadEXRCount, inputPaths.size());
     }
     if (saveEXRCount == 0) {
         if (_logger) _logger->warn("No SaveEXR nodes found in workflow! Workflow may not produce output.");
     }
 
-    // Log the FINAL workflow that will be submitted to ComfyUI
+    // Log the FINAL workflow
     if (_logger) {
-        _logger->debug("=== FINAL WORKFLOW (after smart injection) ===");
-        _logger->debug("Complete workflow JSON that will be sent to ComfyUI:");
+        _logger->debug("=== FINAL WORKFLOW (after path injection) ===");
         _logger->debug("{}", modifiedWorkflow.dump(2));
         _logger->debug("=== END FINAL WORKFLOW ===");
     }
@@ -1115,8 +1471,9 @@ void AnyComfyPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     );
 
     // Supported contexts
-    desc.addSupportedContext(OFX::eContextFilter);
-    desc.addSupportedContext(OFX::eContextGeneral);
+    desc.addSupportedContext(OFX::eContextFilter);    // Standard filter (requires input)
+    desc.addSupportedContext(OFX::eContextGeneral);   // General (optional input)
+    desc.addSupportedContext(OFX::eContextGenerator); // Generator (no input required)
 
     // Supported pixel depths
     desc.addSupportedBitDepth(OFX::eBitDepthFloat);
@@ -1159,13 +1516,47 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         }
     }
 
-    // Source clip
-    OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
-    srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
-    srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
-    srcClip->setSupportsTiles(false);
-    srcClip->setIsMask(false);
+    // Source clip (primary input)
+    // - Required in Filter context
+    // - Optional in General/Generator contexts (for generator workflows with 0 inputs)
+    if (context != OFX::eContextGenerator) {
+        OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
+        srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
+        srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
+        srcClip->setTemporalClipAccess(false);
+        srcClip->setSupportsTiles(false);
+        srcClip->setIsMask(false);
+        // Make optional in General context to support generator workflows
+        if (context == OFX::eContextGeneral) {
+            srcClip->setOptional(true);
+        }
+    }
+
+    // Source2 clip (secondary input - optional, maps to InputB in ComfyUI)
+    // Not available in Generator context
+    if (context != OFX::eContextGenerator) {
+        OFX::ClipDescriptor *src2Clip = desc.defineClip("Source2");
+        src2Clip->addSupportedComponent(OFX::ePixelComponentRGBA);
+        src2Clip->addSupportedComponent(OFX::ePixelComponentRGB);
+        src2Clip->setTemporalClipAccess(false);
+        src2Clip->setSupportsTiles(false);
+        src2Clip->setIsMask(false);
+        src2Clip->setOptional(true);
+        src2Clip->setLabel("Source2");
+    }
+
+    // Source3 clip (tertiary input - optional, maps to InputC in ComfyUI)
+    // Not available in Generator context
+    if (context != OFX::eContextGenerator) {
+        OFX::ClipDescriptor *src3Clip = desc.defineClip("Source3");
+        src3Clip->addSupportedComponent(OFX::ePixelComponentRGBA);
+        src3Clip->addSupportedComponent(OFX::ePixelComponentRGB);
+        src3Clip->setTemporalClipAccess(false);
+        src3Clip->setSupportsTiles(false);
+        src3Clip->setIsMask(false);
+        src3Clip->setOptional(true);
+        src3Clip->setLabel("Source3");
+    }
 
     // Output clip
     OFX::ClipDescriptor *dstClip = desc.defineClip(kOfxImageEffectOutputClipName);
@@ -1207,6 +1598,34 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         );
         param->setStringType(OFX::eStringTypeSingleLine);
         param->setDefault("");
+        param->setAnimates(false);
+        param->setParent(*workflowGroup);
+    }
+
+    // New Workflow Input Count (choice for selecting template type)
+    {
+        OFX::ChoiceParamDescriptor *param = desc.defineChoiceParam("newWorkflowInputCount");
+        param->setLabels("Inputs", "Inputs", "New Workflow Input Count");
+        param->setHint(
+            "Number of input images for the new workflow template.\n\n"
+            "• 0 inputs: Generator workflow (text-to-image, procedural, etc.)\n"
+            "  Template has only SaveEXR output node.\n\n"
+            "• 1 input: Standard filter workflow (Recommended)\n"
+            "  Template has LoadEXR (InputA) and SaveEXR nodes.\n"
+            "  Use Source clip for input.\n\n"
+            "• 2 inputs: Compositing workflow\n"
+            "  Template has LoadEXR (InputA, InputB) and SaveEXR nodes.\n"
+            "  Use Source and Source2 clips for inputs.\n\n"
+            "• 3 inputs: Multi-input workflow\n"
+            "  Template has LoadEXR (InputA, InputB, InputC) and SaveEXR nodes.\n"
+            "  Use Source, Source2, and Source3 clips for inputs.\n\n"
+            "LoadEXR nodes are mapped to OFX clips by title or position."
+        );
+        param->appendOption("0 inputs (Generator)");
+        param->appendOption("1 input (Standard)");
+        param->appendOption("2 inputs (Compositing)");
+        param->appendOption("3 inputs (Multi-input)");
+        param->setDefault(1);  // Default to 1 input (standard filter workflow)
         param->setAnimates(false);
         param->setParent(*workflowGroup);
     }

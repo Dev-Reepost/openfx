@@ -69,6 +69,8 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     : ImageEffect(handle)
     , _srcClip(nullptr)
     , _dstClip(nullptr)
+    , _src2Clip(nullptr)
+    , _src3Clip(nullptr)
     , _enableProcessing(nullptr)
     , _serverAddress(nullptr)
     , _serverPort(nullptr)
@@ -109,6 +111,23 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
 
     _srcClip = fetchClip(kOfxImageEffectSimpleSourceClipName);
     _dstClip = fetchClip(kOfxImageEffectOutputClipName);
+
+    // Fetch optional secondary input clips (may return nullptr if not defined)
+    try {
+        _src2Clip = fetchClip("Source2");
+        if (_logger && _src2Clip) _logger->info("Source2 clip available");
+    } catch (...) {
+        _src2Clip = nullptr;
+        if (_logger) _logger->debug("Source2 clip not defined for this plugin");
+    }
+
+    try {
+        _src3Clip = fetchClip("Source3");
+        if (_logger && _src3Clip) _logger->info("Source3 clip available");
+    } catch (...) {
+        _src3Clip = nullptr;
+        if (_logger) _logger->debug("Source3 clip not defined for this plugin");
+    }
 
     // Log all available OFX context properties for testing
     if (_logger) {
@@ -487,6 +506,21 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
         }
     }
 
+    // Invalidate RoD cache when parameters affecting output path change
+    // This ensures canvas resizes correctly when switching between instances
+    if (paramName == "projectName" || paramName == "workflowName" ||
+        paramName == "outputVersion" || paramName == "workflowFilePath") {
+        std::lock_guard<std::mutex> lock(_cacheMutex);
+        if (!_cacheDimensions.empty() || !_cacheFileExists.empty()) {
+            if (_logger) {
+                _logger->info("Parameter '{}' changed - invalidating RoD cache ({} frames, {} paths cached)",
+                             paramName, _cacheDimensions.size(), _cacheFileExists.size());
+            }
+            _cacheDimensions.clear();
+            _cacheFileExists.clear();
+        }
+    }
+
     // Recreate ComfyUI client if server parameters change
     if (paramName == "serverAddress" || paramName == "serverPort") {
         // Get current values
@@ -611,28 +645,54 @@ bool BasePlugin::getRegionOfDefinition(const OFX::RegionOfDefinitionArguments &a
 {
     int frame = static_cast<int>(args.time);
 
-    // Check if we have cached dimensions for this frame's output
+    // IMPORTANT: Always construct the expected output path for THIS instance
+    // This ensures we're checking the correct file when switching between instances
+    std::string expectedOutputPath = constructExpectedOutputPath(frame);
+
+    // Check if we have cached dimensions AND verify the cached file still exists
+    // This prevents stale cache from wrong instance/workflow
     {
         std::lock_guard<std::mutex> lock(_cacheMutex);
         auto it = _cacheDimensions.find(frame);
         if (it != _cacheDimensions.end()) {
-            // Use cached output dimensions
-            int width = it->second.first;
-            int height = it->second.second;
-            rod.x1 = 0;
-            rod.y1 = 0;
-            rod.x2 = width;
-            rod.y2 = height;
+            // Validate that the cached output file still exists and matches our expected path
+            bool cacheValid = _cacheFileExists.count(expectedOutputPath) > 0;
 
-            if (_logger) {
-                _logger->debug("Frame {}: RoD from cache: {}x{}", frame, width, height);
+            // Also verify file actually exists on disk (not just in memory cache)
+            if (cacheValid) {
+                try {
+                    cacheValid = std::filesystem::exists(expectedOutputPath);
+                } catch (...) {
+                    cacheValid = false;
+                }
             }
-            return true;
+
+            if (cacheValid) {
+                // Use cached output dimensions
+                int width = it->second.first;
+                int height = it->second.second;
+                rod.x1 = 0;
+                rod.y1 = 0;
+                rod.x2 = width;
+                rod.y2 = height;
+
+                if (_logger) {
+                    _logger->debug("Frame {}: RoD from validated cache: {}x{}", frame, width, height);
+                }
+                return true;
+            } else {
+                // Cache is stale (file was deleted or we switched instances)
+                if (_logger) {
+                    _logger->debug("Frame {}: Cached dimensions invalid, re-checking output file", frame);
+                }
+                // Clear stale cache entry
+                _cacheDimensions.erase(frame);
+            }
         }
     }
 
-    // No cached dimensions yet - check if output file exists
-    std::string cachedPath = constructExpectedOutputPath(frame);
+    // No valid cached dimensions - check if output file exists
+    std::string cachedPath = expectedOutputPath;
     bool fileExists = false;
 
     {
@@ -693,7 +753,38 @@ bool BasePlugin::getRegionOfDefinition(const OFX::RegionOfDefinitionArguments &a
         return true;
     }
 
-    return false;
+    // Generator workflow (no source connected) - use project size as default
+    // This allows generator workflows to run without a source clip
+    try {
+        double projectW = getPropertySet().propGetDouble(kOfxImageEffectPropProjectSize, 0, false);
+        double projectH = getPropertySet().propGetDouble(kOfxImageEffectPropProjectSize, 1, false);
+
+        if (projectW > 0 && projectH > 0) {
+            rod.x1 = 0;
+            rod.y1 = 0;
+            rod.x2 = projectW;
+            rod.y2 = projectH;
+
+            if (_logger) {
+                _logger->info("Frame {}: Generator workflow - RoD from project size: {}x{}",
+                             frame, static_cast<int>(projectW), static_cast<int>(projectH));
+            }
+            return true;
+        }
+    } catch (...) {
+        // Project size not available
+    }
+
+    // Last resort: return a reasonable default size (1920x1080 HD)
+    rod.x1 = 0;
+    rod.y1 = 0;
+    rod.x2 = 1920;
+    rod.y2 = 1080;
+
+    if (_logger) {
+        _logger->warn("Frame {}: Generator workflow - using default RoD 1920x1080", frame);
+    }
+    return true;
 }
 
 void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
@@ -736,28 +827,26 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     int frame = static_cast<int>(args.time);
     if (_logger) _logger->info("Processing frame: {}", frame);
 
-    // Step 1: Write input image to shared storage
-    if (_logger) _logger->info("Step 1: Writing input image to shared storage");
+    // Step 1: Write input images to shared storage (if any connected)
+    if (_logger) _logger->info("Step 1: Writing input image(s) to shared storage");
     progressUpdate(0.1);
 
-    // Check if source clip is connected
-    if (!_srcClip->isConnected()) {
-        if (_logger) _logger->error("ERROR: Source clip is not connected!");
-        throw std::runtime_error("Source clip is not connected. Please connect an input to the plugin.");
+    // Write all connected input clips to EXR files
+    // Returns map: "InputA" -> path, "InputB" -> path, "InputC" -> path
+    // For generator workflows (0 inputs), this map will be empty
+    std::map<std::string, std::string> inputPaths = writeInputImages(frame);
+
+    if (inputPaths.empty()) {
+        // No inputs connected - this is valid for generator workflows
+        if (_logger) _logger->info("No input clips connected - running as generator workflow (0 inputs)");
+    } else {
+        if (_logger) {
+            _logger->info("Input images written: {} file(s)", inputPaths.size());
+            for (const auto& [inputId, path] : inputPaths) {
+                _logger->info("  {} -> {}", inputId, path);
+            }
+        }
     }
-
-    std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
-
-    if (!src.get()) {
-        if (_logger) _logger->error("ERROR: Failed to fetch source image!");
-        throw std::runtime_error("Failed to fetch source image from clip.");
-    }
-
-    if (_logger) _logger->info("Source image fetched successfully");
-    if (_logger) _logger->info("Fetched source image from clip");
-
-    std::string inputPath = writeInputImage(src.get(), frame);
-    if (_logger) _logger->info("Input image written to: {}", inputPath);
 
     // Step 2: Check if output already exists (avoid overwrite error)
     if (_logger) _logger->info("Step 2: Checking if output file already exists");
@@ -810,7 +899,7 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     // Step 3: Build workflow (implemented by derived class)
     if (_logger) _logger->info("Step 3: Building workflow JSON");
     progressUpdate(0.2);
-    json workflow = buildWorkflow(frame, inputPath);
+    json workflow = buildWorkflow(frame, inputPaths);
     if (_logger) {
         _logger->info("Workflow JSON built: {} characters", workflow.dump().length());
         _logger->info("Workflow JSON content:\n{}", workflow.dump(2));  // Pretty print with 2-space indent
@@ -1126,7 +1215,7 @@ void BasePlugin::copyPixelData(const OFX::Image* src, OFX::Image* dst)
     }
 }
 
-std::string BasePlugin::writeInputImage(OFX::Image* img, int frame)
+std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::string& suffix)
 {
     if (!img) {
         if (_logger) _logger->error("No input image to write");
@@ -1143,15 +1232,16 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame)
     // Get effective basename (auto-generated or manual)
     std::string basename = getEffectiveBasename();
 
-    // Build path matching output pattern: basename.frame.exr
+    // Build path matching output pattern: basename[_suffix].frame.exr
     // Input and output now use the same naming convention for consistency
     // Example: /Volumes/silo2/002_COMFYUI/in/acme_spot/segmentation/v001/shot01.0001.exr
+    // With suffix: /Volumes/silo2/002_COMFYUI/in/acme_spot/segmentation/v001/shot01_B.0001.exr
     std::ostringstream filename;
-    filename << mountPath << "/in/" 
-             << project << "/" 
-             << workflow << "/" 
+    filename << mountPath << "/in/"
+             << project << "/"
+             << workflow << "/"
              << version << "/"
-             << basename << "."
+             << basename << suffix << "."
              << std::setw(4) << std::setfill('0') << frame << ".exr";
 
     if (_logger) _logger->info("Writing input image to: {}", filename.str());
@@ -1459,12 +1549,13 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
     return outputPath.str();
 }
 
-std::string BasePlugin::constructInputPath(int frame)
+std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
 {
     // Construct the input file path that was written by writeInputImage()
-    // Pattern: {mountPath}/in/{project}/{workflow}/{version}/{basename}.{frame:04d}.exr
+    // Pattern: {mountPath}/in/{project}/{workflow}/{version}/{basename}[_suffix].{frame:04d}.exr
     //
     // Example: /Volumes/silo2/002_COMFYUI/in/TEST_SAM/segmentation/v001/shot01.0056.exr
+    // With suffix: /Volumes/silo2/002_COMFYUI/in/TEST_SAM/segmentation/v001/shot01_B.0056.exr
 
     std::string mountPath, project, workflow, version;
     _macMountPath->getValue(mountPath);
@@ -1481,10 +1572,67 @@ std::string BasePlugin::constructInputPath(int frame)
               << project << "/"
               << workflow << "/"
               << version << "/"
-              << basename << "."
+              << basename << suffix << "."
               << std::setfill('0') << std::setw(4) << frame << ".exr";
 
     return inputPath.str();
+}
+
+std::map<std::string, std::string> BasePlugin::writeInputImages(int frame)
+{
+    if (_logger) _logger->info("=== WRITING INPUT IMAGES (CONFLICT-FREE NAMING) ===");
+
+    std::map<std::string, std::string> inputPaths;
+
+    // Write primary input (Source clip)
+    // Naming: {basename}.{frame}.exr (no suffix for backward compatibility)
+    if (_srcClip && _srcClip->isConnected()) {
+        std::unique_ptr<OFX::Image> srcImg(_srcClip->fetchImage(frame));
+        if (srcImg.get()) {
+            std::string path = writeInputImage(srcImg.get(), frame, "");  // No suffix for primary
+            inputPaths["InputA"] = path;
+            if (_logger) _logger->info("✓ InputA (Source): {} [no suffix]", path);
+        }
+    }
+
+    // Write secondary input (Source2 clip)
+    // Naming: {basename}_B.{frame}.exr (suffix prevents collision with InputA)
+    if (_src2Clip && _src2Clip->isConnected()) {
+        std::unique_ptr<OFX::Image> src2Img(_src2Clip->fetchImage(frame));
+        if (src2Img.get()) {
+            std::string path = writeInputImage(src2Img.get(), frame, "_B");
+            inputPaths["InputB"] = path;
+            if (_logger) _logger->info("✓ InputB (Source2): {} [suffix: _B]", path);
+        }
+    }
+
+    // Write tertiary input (Source3 clip)
+    // Naming: {basename}_C.{frame}.exr (suffix prevents collision with InputA & InputB)
+    if (_src3Clip && _src3Clip->isConnected()) {
+        std::unique_ptr<OFX::Image> src3Img(_src3Clip->fetchImage(frame));
+        if (src3Img.get()) {
+            std::string path = writeInputImage(src3Img.get(), frame, "_C");
+            inputPaths["InputC"] = path;
+            if (_logger) _logger->info("✓ InputC (Source3): {} [suffix: _C]", path);
+        }
+    }
+
+    if (_logger) {
+        _logger->info("Total input images written: {} (all with unique filenames)", inputPaths.size());
+        if (inputPaths.size() > 1) {
+            _logger->info("✓ No filename conflicts: suffixes (_B, _C) ensure unique paths");
+        }
+    }
+    return inputPaths;
+}
+
+int BasePlugin::getConnectedInputCount() const
+{
+    int count = 0;
+    if (_srcClip && _srcClip->isConnected()) count++;
+    if (_src2Clip && _src2Clip->isConnected()) count++;
+    if (_src3Clip && _src3Clip->isConnected()) count++;
+    return count;
 }
 
 std::string BasePlugin::getEffectiveBasename()
@@ -1720,12 +1868,12 @@ json BasePlugin::loadWorkflowFromFile(const std::string& filepath)
     }
 }
 
-json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const std::string& inputPath)
+json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const std::map<std::string, std::string>& inputPaths)
 {
     // Default implementation: replace placeholders in workflow JSON
     // Derived classes can override for more complex customization
 
-    if (_logger) _logger->debug("Customizing workflow for frame {}", frame);
+    if (_logger) _logger->debug("Customizing workflow for frame {} with {} input(s)", frame, inputPaths.size());
 
     // Convert the workflow to a string for placeholder replacement
     std::string workflowStr = baseWorkflow.dump();
@@ -1745,27 +1893,53 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
                  << "/" << version << "/" << basename;
 
     // Convert paths for ComfyUI
-    std::string comfyInputPath = convertPathForComfyUI(inputPath);
     std::string comfyOutputPrefix = convertPathForComfyUI(outputPrefix.str());
 
     // Common placeholder replacements
-    // ${INPUT_PATH} - input EXR file path (Windows format for ComfyUI)
+    // ${INPUT_PATH} - primary input EXR (legacy, backward compatible, same as INPUT_PATH_A)
+    // ${INPUT_PATH_A} - InputA (Source clip)
+    // ${INPUT_PATH_B} - InputB (Source2 clip)
+    // ${INPUT_PATH_C} - InputC (Source3 clip)
     // ${OUTPUT_PREFIX} - output file prefix (Windows format for ComfyUI)
     // ${FRAME} - current frame number
 
     size_t pos = 0;
     std::string placeholder;
-
-    // Replace ${INPUT_PATH}
-    placeholder = "${INPUT_PATH}";
-    if (_logger) _logger->debug("Replacing ${{INPUT_PATH}} with: {}", comfyInputPath);
     int replaceCount = 0;
-    while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
-        workflowStr.replace(pos, placeholder.length(), comfyInputPath);
-        replaceCount++;
+
+    // Replace ${INPUT_PATH_A}, ${INPUT_PATH_B}, ${INPUT_PATH_C}
+    std::map<std::string, std::string> placeholderMap = {
+        {"${INPUT_PATH_A}", "InputA"},
+        {"${INPUT_PATH_B}", "InputB"},
+        {"${INPUT_PATH_C}", "InputC"},
+        {"${INPUT_PATH}", "InputA"}  // Legacy placeholder maps to InputA
+    };
+
+    for (const auto& [placeholderStr, inputId] : placeholderMap) {
+        if (inputPaths.count(inputId) > 0) {
+            std::string comfyInputPath = convertPathForComfyUI(inputPaths.at(inputId));
+            if (_logger) _logger->debug("Replacing {} with: {}", placeholderStr, comfyInputPath);
+            replaceCount = 0;
+            while ((pos = workflowStr.find(placeholderStr)) != std::string::npos) {
+                workflowStr.replace(pos, placeholderStr.length(), comfyInputPath);
+                replaceCount++;
+            }
+            if (_logger && replaceCount > 0) {
+                _logger->debug("  Replaced {} {} time(s)", placeholderStr, replaceCount);
+            }
+        }
     }
-    if (_logger && replaceCount == 0) {
-        _logger->warn("INPUT_PATH placeholder not found in workflow!");
+
+    // Warn if no input placeholders were found at all
+    bool anyInputPlaceholderFound = false;
+    for (const auto& [placeholderStr, inputId] : placeholderMap) {
+        if (baseWorkflow.dump().find(placeholderStr) != std::string::npos) {
+            anyInputPlaceholderFound = true;
+            break;
+        }
+    }
+    if (!anyInputPlaceholderFound && _logger) {
+        _logger->debug("No INPUT_PATH placeholders found in workflow (may use direct node injection instead)");
     }
 
     // Replace ${OUTPUT_PREFIX}
@@ -2180,67 +2354,108 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
             return;
         }
 
-        // Fetch source image (fast, in-memory operation)
-        if (!_srcClip || !_srcClip->isConnected()) {
-            if (_logger) _logger->error("Frame {}: Source clip not connected", frame);
+        // Fetch source images (fast, in-memory operation)
+        // For generator workflows (0 inputs), source may not be connected - that's OK
+        bool hasSourceConnected = _srcClip && _srcClip->isConnected();
+
+        if (!hasSourceConnected) {
+            if (_logger) _logger->info("Frame {}: No source clip connected - running as generator workflow", frame);
+        }
+
+        auto fetchStart = std::chrono::steady_clock::now();
+
+        // Helper lambda to convert OFX image to ImageData
+        auto convertClipToImageData = [this](OFX::Clip* clip, double time) -> ImageData {
+            std::unique_ptr<OFX::Image> img(clip->fetchImage(time));
+            if (!img.get()) {
+                throw std::runtime_error("Failed to fetch image from clip");
+            }
+
+            OfxRectI bounds = img->getBounds();
+            int width = bounds.x2 - bounds.x1;
+            int height = bounds.y2 - bounds.y1;
+            int rowBytes = img->getRowBytes();
+            int pixelComponents = img->getPixelComponentCount();
+            OFX::BitDepthEnum bitDepth = img->getPixelDepth();
+
+            int bitDepthInt = 32;
+            if (bitDepth == OFX::eBitDepthUByte) bitDepthInt = 8;
+            else if (bitDepth == OFX::eBitDepthUShort) bitDepthInt = 16;
+
+            return ImageIO::fromOFXBuffer(
+                img->getPixelData(), width, height, rowBytes, pixelComponents, bitDepthInt
+            );
+        };
+
+        // Collect all connected input images
+        std::map<std::string, ImageData> imageDataMap;
+        std::map<std::string, std::string> inputPathMap;
+        std::string basename = getEffectiveBasename();
+
+        // Helper to construct input path with suffix
+        auto makeInputPath = [&](const std::string& suffix) {
+            std::ostringstream ss;
+            ss << mountPath << "/in/"
+               << projectName << "/"
+               << workflowName << "/"
+               << version << "/"
+               << basename << suffix << "."
+               << std::setw(4) << std::setfill('0') << frame << ".exr";
+            return ss.str();
+        };
+
+        try {
+            // Primary input (InputA / Source) - only if connected
+            // Path: {basename}.{frame}.exr (no suffix)
+            if (hasSourceConnected) {
+                imageDataMap["InputA"] = convertClipToImageData(_srcClip, args.time);
+                inputPathMap["InputA"] = makeInputPath("");
+                if (_logger) _logger->info("Frame {}: InputA (Source) → {} [no suffix]",
+                                         frame, inputPathMap["InputA"]);
+            }
+
+            // Secondary input (InputB / Source2) - optional
+            // Path: {basename}_B.{frame}.exr (suffix prevents collision)
+            if (_src2Clip && _src2Clip->isConnected()) {
+                imageDataMap["InputB"] = convertClipToImageData(_src2Clip, args.time);
+                inputPathMap["InputB"] = makeInputPath("_B");
+                if (_logger) _logger->info("Frame {}: InputB (Source2) → {} [suffix: _B]",
+                                         frame, inputPathMap["InputB"]);
+            }
+
+            // Tertiary input (InputC / Source3) - optional
+            // Path: {basename}_C.{frame}.exr (suffix prevents collision)
+            if (_src3Clip && _src3Clip->isConnected()) {
+                imageDataMap["InputC"] = convertClipToImageData(_src3Clip, args.time);
+                inputPathMap["InputC"] = makeInputPath("_C");
+                if (_logger) _logger->info("Frame {}: InputC (Source3) → {} [suffix: _C]",
+                                         frame, inputPathMap["InputC"]);
+            }
+        } catch (const std::exception& e) {
+            if (_logger) _logger->error("Frame {}: Failed to fetch source image: {}", frame, e.what());
             returnPlaceholder(args, frame);
             return;
         }
 
-        auto fetchStart = std::chrono::steady_clock::now();
-        std::unique_ptr<OFX::Image> src(_srcClip->fetchImage(args.time));
-        if (!src.get()) {
-            if (_logger) _logger->error("Frame {}: Failed to fetch source image", frame);
-            returnPlaceholder(args, frame);
-            return;
+        // Log input count and confirm no conflicts
+        if (imageDataMap.empty()) {
+            if (_logger) _logger->info("Frame {}: Generator workflow - no input images", frame);
+        } else if (imageDataMap.size() > 1) {
+            if (_logger) _logger->info("Frame {}: {} inputs with conflict-free naming (suffixes: _B, _C)",
+                                     frame, imageDataMap.size());
         }
 
         auto fetchDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - fetchStart);
 
-        // Convert OFX image to ImageData (fast, in-memory copy)
         auto convertStart = std::chrono::steady_clock::now();
-
-        OfxRectI bounds = src->getBounds();
-        int width = bounds.x2 - bounds.x1;
-        int height = bounds.y2 - bounds.y1;
-        int rowBytes = src->getRowBytes();
-        int pixelComponents = src->getPixelComponentCount();
-        OFX::BitDepthEnum bitDepth = src->getPixelDepth();
-
-        int bitDepthInt = 32; // default to float
-        if (bitDepth == OFX::eBitDepthUByte) {
-            bitDepthInt = 8;
-        } else if (bitDepth == OFX::eBitDepthUShort) {
-            bitDepthInt = 16;
-        }
-
-        const void* pixelData = src->getPixelData();
-
-        ImageData imageData = ImageIO::fromOFXBuffer(
-            pixelData,
-            width,
-            height,
-            rowBytes,
-            pixelComponents,
-            bitDepthInt
-        );
-
         auto convertDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - convertStart);
 
-        // Construct input file path (reuse variables from above)
-        std::string basename = getEffectiveBasename();
-
-        std::ostringstream filename;
-        filename << mountPath << "/in/"
-                 << projectName << "/"
-                 << workflowName << "/"
-                 << version << "/"
-                 << basename << "."
-                 << std::setw(4) << std::setfill('0') << frame << ".exr";
-
-        std::string inputPath = filename.str();
+        if (_logger) {
+            _logger->info("Frame {}: Fetched {} input image(s) in {} ms",
+                         frame, imageDataMap.size(), fetchDuration.count());
+        }
 
         // Ensure ComfyUI client exists
         if (!_comfyClient) {
@@ -2267,7 +2482,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
         if (_jobManager) {
             auto submitStart = std::chrono::steady_clock::now();
 
-            _jobManager->submitJobAsync(frame, imageData, inputPath, cachedPath, this);
+            _jobManager->submitJobAsync(frame, imageDataMap, inputPathMap, cachedPath, this);
 
             auto submitDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - submitStart);
@@ -2388,14 +2603,38 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
                           frame, expectedWidth, expectedHeight, inputPath);
         }
     } catch (const std::exception& e) {
-        // If we can't read the input file, fall back to RoD
-        // This handles edge cases where input may have been deleted
+        // If we can't read the input file, fall back to RoD or project size
+        // This handles generator workflows and edge cases where input may have been deleted
         if (_logger) {
-            _logger->warn("Frame {}: Could not read input EXR, falling back to RoD: {}", frame, e.what());
+            _logger->debug("Frame {}: Could not read input EXR: {}", frame, e.what());
         }
-        OfxRectD rod = _srcClip->getRegionOfDefinition(args.time);
-        expectedWidth = static_cast<int>(rod.x2 - rod.x1);
-        expectedHeight = static_cast<int>(rod.y2 - rod.y1);
+
+        if (_srcClip && _srcClip->isConnected()) {
+            OfxRectD rod = _srcClip->getRegionOfDefinition(args.time);
+            expectedWidth = static_cast<int>(rod.x2 - rod.x1);
+            expectedHeight = static_cast<int>(rod.y2 - rod.y1);
+            if (_logger) {
+                _logger->debug("Frame {}: Using source RoD for expected dimensions: {}x{}", frame, expectedWidth, expectedHeight);
+            }
+        } else {
+            // Generator workflow - use project size or default
+            try {
+                double projectW = getPropertySet().propGetDouble(kOfxImageEffectPropProjectSize, 0, false);
+                double projectH = getPropertySet().propGetDouble(kOfxImageEffectPropProjectSize, 1, false);
+                expectedWidth = static_cast<int>(projectW);
+                expectedHeight = static_cast<int>(projectH);
+                if (_logger) {
+                    _logger->debug("Frame {}: Generator workflow - using project size: {}x{}", frame, expectedWidth, expectedHeight);
+                }
+            } catch (...) {
+                // Fall back to output image dimensions (will be validated later)
+                expectedWidth = 0;
+                expectedHeight = 0;
+                if (_logger) {
+                    _logger->debug("Frame {}: Generator workflow - will use output dimensions", frame);
+                }
+            }
+        }
     }
 
     if (_logger) {
@@ -2471,9 +2710,15 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
             std::vector<float> extractedPixels;
             extractedPixels.reserve(renderWidth * renderHeight * outputImageData.channels);
 
+            // IMPORTANT: Convert OFX coordinates (bottom-up) to EXR coordinates (top-down)
+            // renderWindow uses OFX coordinates where Y increases upward from bottom
+            // but outputImageData uses EXR format where Y increases downward from top
             for (int y = renderWindow.y1; y < renderWindow.y2; ++y) {
+                // Convert OFX Y to EXR Y: flip coordinate system
+                int exrY = outputImageData.height - 1 - y;
+
                 for (int x = renderWindow.x1; x < renderWindow.x2; ++x) {
-                    int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
+                    int srcIdx = (exrY * outputImageData.width + x) * outputImageData.channels;
                     for (int c = 0; c < outputImageData.channels; ++c) {
                         extractedPixels.push_back(outputImageData.pixels[srcIdx + c]);
                     }
@@ -2732,6 +2977,7 @@ void BasePlugin::renderCheckerboard(OFX::Image* dst)
     }
 
     unsigned char* pixels = static_cast<unsigned char*>(dst->getPixelData());
+    if (!pixels) return;
 
     // Checkerboard pattern (32x32 squares for better visibility)
     int squareSize = 32;
@@ -2746,19 +2992,34 @@ void BasePlugin::renderCheckerboard(OFX::Image* dst)
 
             if (bitDepth == OFX::eBitDepthUByte) {
                 unsigned char byteValue = static_cast<unsigned char>(value * 255);
-                for (int c = 0; c < pixelComponents; ++c) {
+                // Set RGB/color channels
+                for (int c = 0; c < std::min(3, pixelComponents); ++c) {
                     pixel[c] = byteValue;
+                }
+                // Set alpha to fully opaque if RGBA
+                if (pixelComponents == 4) {
+                    pixel[3] = 255;
                 }
             } else if (bitDepth == OFX::eBitDepthUShort) {
                 unsigned short* shortPixel = reinterpret_cast<unsigned short*>(pixel);
                 unsigned short shortValue = static_cast<unsigned short>(value * 65535);
-                for (int c = 0; c < pixelComponents; ++c) {
+                // Set RGB/color channels
+                for (int c = 0; c < std::min(3, pixelComponents); ++c) {
                     shortPixel[c] = shortValue;
+                }
+                // Set alpha to fully opaque if RGBA
+                if (pixelComponents == 4) {
+                    shortPixel[3] = 65535;
                 }
             } else {  // float
                 float* floatPixel = reinterpret_cast<float*>(pixel);
-                for (int c = 0; c < pixelComponents; ++c) {
+                // Set RGB/color channels
+                for (int c = 0; c < std::min(3, pixelComponents); ++c) {
                     floatPixel[c] = value;
+                }
+                // Set alpha to fully opaque if RGBA
+                if (pixelComponents == 4) {
+                    floatPixel[3] = 1.0f;
                 }
             }
         }

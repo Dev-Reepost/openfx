@@ -1,0 +1,162 @@
+{
+  "last_node_id": 12,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 10,
+      "type": "LoadEXR",
+      "pos": [
+        200,
+        400
+      ],
+      "size": {
+        "0": 315,
+        "1": 194
+      },
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "RGB",
+          "type": "IMAGE",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "title": "InputA",
+      "properties": {
+        "Node name for S&R": "LoadEXR"
+      },
+      "widgets_values": [
+        "InputA - primary input from OFX Source clip",
+        true,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": 11,
+      "type": "LoadEXR",
+      "pos": [
+        200,
+        700
+      ],
+      "size": {
+        "0": 315,
+        "1": 194
+      },
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "RGB",
+          "type": "IMAGE",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "title": "InputB",
+      "properties": {
+        "Node name for S&R": "LoadEXR"
+      },
+      "widgets_values": [
+        "InputB - secondary input from OFX Source2 clip",
+        true,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": 12,
+      "type": "SaveEXR",
+      "pos": [
+        1200,
+        550
+      ],
+      "size": {
+        "0": 315,
+        "1": 154
+      },
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveEXR"
+      },
+      "widgets_values": [
+        "ComfyUI",
+        true,
+        1,
+        1001,
+        4
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [
+    {
+      "title": "OFX Inputs - Source & Source2",
+      "bounding": [150, 350, 420, 600],
+      "color": "#3f8e3f",
+      "font_size": 24
+    },
+    {
+      "title": "Processing - Add your nodes here",
+      "bounding": [620, 400, 520, 500],
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "OFX Output",
+      "bounding": [1150, 500, 420, 260],
+      "color": "#8c4646",
+      "font_size": 24
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8,
+      "offset": {
+        "0": 50,
+        "1": 50
+      }
+    }
+  },
+  "version": 0.4
+}

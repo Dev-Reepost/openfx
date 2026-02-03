@@ -122,8 +122,8 @@ void AsyncJobManager::submitJob(int frame, const json& workflow, const std::stri
 }
 
 void AsyncJobManager::submitJobAsync(int frame,
-                                     const ImageData& imageData,
-                                     const std::string& inputPath,
+                                     const std::map<std::string, ImageData>& imageDataMap,
+                                     const std::map<std::string, std::string>& inputPathMap,
                                      const std::string& outputPath,
                                      BasePlugin* basePlugin)
 {
@@ -132,10 +132,12 @@ void AsyncJobManager::submitJobAsync(int frame,
     if (_logger) {
         _logger->info("========================================");
         _logger->info("AsyncJobManager::submitJobAsync() - Frame {} (TRULY NON-BLOCKING)", frame);
-        _logger->info("  Input path: {}", inputPath);
         _logger->info("  Output path: {}", outputPath);
-        _logger->info("  Image: {}x{}, {} channels, {} pixels",
-                     imageData.width, imageData.height, imageData.channels, imageData.pixels.size());
+        _logger->info("  Input images: {}", imageDataMap.size());
+        for (const auto& [inputId, imageData] : imageDataMap) {
+            _logger->info("    {}: {}x{}, {} channels",
+                         inputId, imageData.width, imageData.height, imageData.channels);
+        }
     }
 
     // Create placeholder job immediately (marks frame as pending)
@@ -158,22 +160,32 @@ void AsyncJobManager::submitJobAsync(int frame,
 
     // Launch background thread to handle I/O and submission
     // Note: We detach the thread because we don't need to wait for it
-    std::thread([this, frame, imageData, inputPath, outputPath, basePlugin, startTime]() {
+    std::thread([this, frame, imageDataMap, inputPathMap, outputPath, basePlugin, startTime]() {
         try {
             auto writeStartTime = std::chrono::steady_clock::now();
 
             if (_logger) {
-                _logger->info("  [BG Thread] Frame {}: Writing input image...", frame);
+                _logger->info("  [BG Thread] Frame {}: Writing {} input image(s)...", frame, imageDataMap.size());
             }
 
-            // Write input EXR file (THIS IS THE SLOW PART - now in background!)
-            ImageIO::writeEXR(inputPath, imageData);
+            // Write all input EXR files (THIS IS THE SLOW PART - now in background!)
+            for (const auto& [inputId, imageData] : imageDataMap) {
+                auto it = inputPathMap.find(inputId);
+                if (it != inputPathMap.end()) {
+                    const std::string& inputPath = it->second;
+                    if (_logger) {
+                        _logger->info("    [BG Thread] Writing {}: {}", inputId, inputPath);
+                    }
+                    ImageIO::writeEXR(inputPath, imageData);
+                }
+            }
 
             auto writeDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - writeStartTime);
 
             if (_logger) {
-                _logger->info("  [BG Thread] Frame {}: Input image written in {} ms", frame, writeDuration.count());
+                _logger->info("  [BG Thread] Frame {}: {} input image(s) written in {} ms",
+                             frame, imageDataMap.size(), writeDuration.count());
             }
 
             // Update status to PENDING_SUBMIT
@@ -188,7 +200,7 @@ void AsyncJobManager::submitJobAsync(int frame,
             // Build workflow (need to call back to BasePlugin)
             auto workflowStartTime = std::chrono::steady_clock::now();
 
-            json workflow = basePlugin->buildWorkflow(frame, inputPath);
+            json workflow = basePlugin->buildWorkflow(frame, inputPathMap);
 
             auto workflowDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - workflowStartTime);

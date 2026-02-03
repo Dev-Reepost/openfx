@@ -182,8 +182,12 @@ ImageData fromOFXBuffer(
 
     const uint8_t* src8 = static_cast<const uint8_t*>(srcPixels);
 
+    // IMPORTANT: Flip Y coordinate to convert from OFX (bottom-up) to EXR (top-down)
+    // OFX: origin at bottom-left, Y increases upward (OpenGL convention)
+    // EXR: origin at top-left, Y increases downward (standard image convention)
     for (int y = 0; y < height; ++y) {
-        const uint8_t* srcRow = src8 + y * rowBytes;
+        int srcY = height - 1 - y;  // Flip Y: bottom row becomes top row
+        const uint8_t* srcRow = src8 + srcY * rowBytes;
 
         for (int x = 0; x < width; ++x) {
             int dstIdx = (y * width + x) * pixelComponents;
@@ -266,8 +270,12 @@ void toOFXBuffer(
 
     uint8_t* dst8 = static_cast<uint8_t*>(dstPixels);
 
+    // IMPORTANT: Flip Y coordinate to convert from EXR (top-down) to OFX (bottom-up)
+    // EXR: origin at top-left, Y increases downward (standard image convention)
+    // OFX: origin at bottom-left, Y increases upward (OpenGL convention)
     for (int y = 0; y < image.height; ++y) {
-        uint8_t* dstRow = dst8 + y * rowBytes;
+        int dstY = image.height - 1 - y;  // Flip Y: top row becomes bottom row
+        uint8_t* dstRow = dst8 + dstY * rowBytes;
 
         for (int x = 0; x < image.width; ++x) {
             int srcIdx = (y * image.width + x) * image.channels;
