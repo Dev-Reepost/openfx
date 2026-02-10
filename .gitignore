@@ -54,6 +54,7 @@ Documentation/doxygen_build
 
 xizvuaie.fcz.txt
 .aider*
+.claude/
 
 # Documentation working files
 contrib/docs/timesheets/
