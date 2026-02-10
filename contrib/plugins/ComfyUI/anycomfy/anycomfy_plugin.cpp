@@ -14,7 +14,10 @@
 #include <chrono>
 
 #ifdef __APPLE__
-#include <cstdlib>
+// ofx_open_url() is implemented in open_url.mm (NSWorkspace wrapper).
+// system("open") is silenced by Resolve's sandbox; LSOpenURLsWithApplication was
+// removed in macOS 26.  NSWorkspace is the only remaining option.
+extern "C" int ofx_open_url(const char* url_cstr);
 #elif defined(_WIN32)
 #include <windows.h>
 #include <shellapi.h>
@@ -33,14 +36,14 @@ namespace ComfyUI {
 AnyComfyPlugin::AnyComfyPlugin(OfxImageEffectHandle handle)
     : BasePlugin(handle)
     , _createNewWorkflow(nullptr)
-    , _openWorkflow(nullptr)
+    , _editWorkflow(nullptr)
     , _comfyUIInputDir(nullptr)
     , _newWorkflowName(nullptr)
     , _newWorkflowInputCount(nullptr)
 {
     // Fetch AnyComfy-specific parameters
     _createNewWorkflow = fetchPushButtonParam("createNewWorkflow");
-    _openWorkflow = fetchPushButtonParam("openWorkflow");
+    _editWorkflow = fetchPushButtonParam("editWorkflow");
     _comfyUIInputDir = fetchStringParam("comfyUIInputDir");
     _newWorkflowName = fetchStringParam("newWorkflowName");
     _newWorkflowInputCount = fetchChoiceParam("newWorkflowInputCount");
@@ -68,9 +71,9 @@ void AnyComfyPlugin::changedParam(const OFX::InstanceChangedArgs &args,
             // Could use sendMessage() to show error to user if needed
         }
     }
-    else if (paramName == "openWorkflow") {
+    else if (paramName == "editWorkflow") {
         // Button pressed - open existing workflow in ComfyUI browser for editing
-        if (_logger) _logger->info("Open Workflow button pressed");
+        if (_logger) _logger->info("Edit Workflow button pressed");
 
         try {
             openExistingWorkflow();
@@ -797,11 +800,14 @@ void AnyComfyPlugin::openComfyUIInBrowser(const std::string& workflowName)
 
     // Open browser - platform specific
 #ifdef __APPLE__
-    // macOS
-    std::string command = "open \"" + url + "\"";
-    int result = std::system(command.c_str());
-    if (result != 0 && _logger) {
-        _logger->warn("Failed to open browser (exit code: {})", result);
+    // macOS: NSWorkspace via open_url.mm.
+    // system("open") is silenced by Resolve's sandbox; LSOpenURLsWithApplication
+    // was removed entirely in macOS 26.  NSWorkspace is the only remaining option.
+    {
+        int result = ofx_open_url(url.c_str());
+        if (result != 0 && _logger) {
+            _logger->error("ofx_open_url failed (malformed URL?): {}", url);
+        }
     }
 #elif defined(_WIN32)
     // Windows
@@ -1564,25 +1570,125 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     dstClip->addSupportedComponent(OFX::ePixelComponentRGB);
     dstClip->setSupportsTiles(false);
 
-    // Create parameter pages
-    OFX::PageParamDescriptor *workflowPage = desc.definePageParam("Workflow");
-    OFX::PageParamDescriptor *projectPage = desc.definePageParam("Project");
-    OFX::PageParamDescriptor *processingPage = desc.definePageParam("Processing");
-    OFX::PageParamDescriptor *serverPage = desc.definePageParam("Server");
+    // Single page with collapsible groups – ordered for Flame compatibility
+    OFX::PageParamDescriptor *page = desc.definePageParam("Controls");
+
+    // Pre-define all six group headers in the desired UI order.
+    // The base-plugin call below populates projectGroup / processingGroup /
+    // serverGroup with their child params; skipGroupHeaders=true prevents it
+    // from re-adding those three headers (we already added them here).
+    OFX::GroupParamDescriptor *setProjectGroup   = desc.defineGroupParam("projectGroup");
+    setProjectGroup->setOpen(true);
+    page->addChild(*setProjectGroup);                                  // 1 – Set Project
+
+    OFX::GroupParamDescriptor *openWorkflowGroup = desc.defineGroupParam("editWorkflowGroup");
+    openWorkflowGroup->setLabel("Open Workflow");
+    openWorkflowGroup->setOpen(true);
+    page->addChild(*openWorkflowGroup);                                // 2 – Open Workflow
+
+    OFX::GroupParamDescriptor *createWorkflowGroup = desc.defineGroupParam("createWorkflowGroup");
+    createWorkflowGroup->setLabel("Create Workflow");
+    createWorkflowGroup->setOpen(true);
+    page->addChild(*createWorkflowGroup);                              // 3 – Create Workflow
+
+    OFX::GroupParamDescriptor *processingGroup   = desc.defineGroupParam("processingGroup");
+    processingGroup->setOpen(true);
+    page->addChild(*processingGroup);                                  // 4 – Processing
+
+    OFX::GroupParamDescriptor *serverGroup       = desc.defineGroupParam("serverGroup");
+    serverGroup->setOpen(false);
+    page->addChild(*serverGroup);                                      // 5 – Server
+
+    OFX::GroupParamDescriptor *ioGroup           = desc.defineGroupParam("ioGroup");
+    ioGroup->setLabel("I/O");
+    ioGroup->setOpen(true);
+    page->addChild(*ioGroup);                                          // 6 – I/O
 
     // ========================================================================
-    // Workflow Page Parameters
+    // Base-class params (populates Project / Processing / Server groups)
+    // skipGroupHeaders=true – we already added the group headers above
     // ========================================================================
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, &configDefaults, true);
 
-    // Create a group for workflow parameters
-    OFX::GroupParamDescriptor *workflowGroup = desc.defineGroupParam("workflowGroup");
-    workflowGroup->setLabel("Workflow Management");
-    workflowGroup->setOpen(true);
-    if (workflowPage) {
-        workflowPage->addChild(*workflowGroup);
+    // The base resets projectGroup's label to "Project" – put it back
+    setProjectGroup->setLabel("Set Project");
+
+    // ========================================================================
+    // Open Workflow group – select and open an existing workflow
+    // (overrides base-class workflowFilePath)
+    // ========================================================================
+    {
+        // Build default workflow path: <comfyUIInputDir>/workflows/
+        #ifdef __APPLE__
+            std::string workflowBaseDir = "/Volumes/silo2/002_COMFYUI/in";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("macComfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["macComfyUIInputDir"].get<std::string>();
+            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
+            }
+            std::string workflowDefault = workflowBaseDir + "/workflows";
+        #elif defined(_WIN32) || defined(_WIN64)
+            std::string workflowBaseDir = "C:\\ComfyUI\\input";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("winComfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["winComfyUIInputDir"].get<std::string>();
+            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
+            }
+            std::string workflowDefault = workflowBaseDir + "\\workflows";
+        #else
+            std::string workflowBaseDir = "/mnt/comfyui/input";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("linuxComfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["linuxComfyUIInputDir"].get<std::string>();
+            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
+                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
+            }
+            std::string workflowDefault = workflowBaseDir + "/workflows";
+        #endif
+
+        OFX::StringParamDescriptor *param = desc.defineStringParam("workflowFilePath");
+        param->setLabel("Select Workflow");
+        param->setHint(
+            "Select an existing ComfyUI workflow to use.\n\n"
+            "IMPORTANT: You must select the API version of the workflow file.\n"
+            "The API file is named: <workflow_name>_api.json\n\n"
+            "Examples:\n"
+            "  workflows/my_denoise/my_denoise_api.json\n"
+            "  workflows/upscale_4x/upscale_4x_api.json\n\n"
+            "Workflows are stored in: " + workflowDefault + "\n\n"
+            "The API format is required because it contains the node graph\n"
+            "structure needed for execution. The regular .json file is the\n"
+            "UI format used for editing in ComfyUI.\n\n"
+            "This path is automatically set when you create a new workflow."
+        );
+        param->setStringType(OFX::eStringTypeFilePath);
+        // Keep default empty - will be filled automatically when:
+        // 1. User clicks "Create Workflow" button (plugin sets it), or
+        // 2. User browses and selects a file
+        // Note: File browser will open at system default, but most hosts remember last location
+        param->setDefault("");
+        param->setAnimates(false);
+        param->setParent(*openWorkflowGroup);
+        // NOTE: Don't call page->addChild() - base plugin already added this parameter to the page
+    }
+    {
+        OFX::PushButtonParamDescriptor *param = desc.definePushButtonParam("editWorkflow");
+        param->setLabels("Open Workflow", "Open Workflow", "Open Workflow in ComfyUI");
+        param->setHint(
+            "Open the selected workflow in ComfyUI for editing.\n\n"
+            "Click this button to modify your workflow in the ComfyUI browser.\n"
+            "The plugin will open ComfyUI with your workflow loaded and ready to edit.\n\n"
+            "After making changes in ComfyUI:\n"
+            "1. Save the workflow (Ctrl+S or Save button)\n"
+            "2. The plugin will automatically use your updated workflow\n\n"
+            "Note: A workflow must be selected above before using this button."
+        );
+        param->setParent(*openWorkflowGroup);
+        page->addChild(*param);
     }
 
-    // New Workflow Name (text field for user input)
+    // ========================================================================
+    // Create Workflow group – create a new workflow from template
+    // ========================================================================
     {
         OFX::StringParamDescriptor *param = desc.defineStringParam("newWorkflowName");
         param->setLabels("New Workflow Name", "Workflow Name", "New Workflow Name");
@@ -1599,13 +1705,12 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         param->setStringType(OFX::eStringTypeSingleLine);
         param->setDefault("");
         param->setAnimates(false);
-        param->setParent(*workflowGroup);
+        param->setParent(*createWorkflowGroup);
+        page->addChild(*param);
     }
-
-    // New Workflow Input Count (choice for selecting template type)
     {
         OFX::ChoiceParamDescriptor *param = desc.defineChoiceParam("newWorkflowInputCount");
-        param->setLabels("Inputs", "Inputs", "New Workflow Input Count");
+        param->setLabels("", "", "New Workflow Input Count");
         param->setHint(
             "Number of input images for the new workflow template.\n\n"
             "• 0 inputs: Generator workflow (text-to-image, procedural, etc.)\n"
@@ -1627,10 +1732,9 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         param->appendOption("3 inputs (Multi-input)");
         param->setDefault(1);  // Default to 1 input (standard filter workflow)
         param->setAnimates(false);
-        param->setParent(*workflowGroup);
+        param->setParent(*createWorkflowGroup);
+        page->addChild(*param);
     }
-
-    // Create New Workflow button
     {
         OFX::PushButtonParamDescriptor *param = desc.definePushButtonParam("createNewWorkflow");
         param->setLabels("New Workflow", "New Workflow", "Create New Workflow");
@@ -1646,54 +1750,8 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
             "3. Saving the workflow in ComfyUI\n\n"
             "The workflow file path will be automatically updated to use your new workflow."
         );
-        param->setParent(*workflowGroup);
-    }
-
-    // ========================================================================
-    // Use base class to define common parameters (includes workflowFilePath)
-    // Pass the config defaults so parameters can use them
-    // ========================================================================
-    BasePlugin::describeCommonParameters(desc, context, projectPage, processingPage, serverPage, &configDefaults);
-
-    // ========================================================================
-    // Move workflowFilePath from Project page to Workflow page
-    // ========================================================================
-    // The base class defines workflowFilePath on the Project page
-    // We redefine it here to move it to the Workflow page and position it between buttons
-    {
-        OFX::StringParamDescriptor *param = desc.defineStringParam("workflowFilePath");
-        param->setLabel("Workflow File Path");
-        param->setHint(
-            "Path to workflow API file (relative to ComfyUI Input Directory).\n\n"
-            "Format: workflows/<workflow_name>/<workflow_name>_api.json\n\n"
-            "Examples:\n"
-            "  workflows/my_denoise/my_denoise_api.json\n"
-            "  workflows/upscale_4x/upscale_4x_api.json\n\n"
-            "This path is automatically set when you:\n"
-            "• Create a new workflow with 'New Workflow' button\n"
-            "• Select an existing workflow from the file browser\n\n"
-            "Leave empty if no workflow is selected."
-        );
-        param->setStringType(OFX::eStringTypeFilePath);
-        param->setDefault("");  // Empty by default for AnyComfy
-        param->setAnimates(false);
-        param->setParent(*workflowGroup);  // Move to Workflow page
-    }
-
-    // Open Workflow button
-    {
-        OFX::PushButtonParamDescriptor *param = desc.definePushButtonParam("openWorkflow");
-        param->setLabels("Open Workflow", "Open Workflow", "Open Workflow in ComfyUI");
-        param->setHint(
-            "Open the currently selected workflow in ComfyUI browser for editing.\n\n"
-            "This allows you to modify an existing workflow at any time.\n\n"
-            "The plugin will:\n"
-            "1. Look for the UI format version of the workflow (editable in ComfyUI)\n"
-            "2. If only API format exists, it will be converted to UI format\n"
-            "3. Open ComfyUI in your browser with the workflow loaded\n\n"
-            "After editing, save the workflow in ComfyUI to update it."
-        );
-        param->setParent(*workflowGroup);
+        param->setParent(*createWorkflowGroup);
+        page->addChild(*param);
     }
 
     // ========================================================================
@@ -1714,37 +1772,105 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     }
 
     // ========================================================================
-    // Add ComfyUI Input Directory parameter to Server page (after base params)
+    // I/O group – OS-specific mount path (compile-time platform detection)
+    // Shows only the relevant path for the OS this plugin is compiled for
     // ========================================================================
     {
+        #ifdef __APPLE__
+            // macOS build
+            OFX::StringParamDescriptor *param = desc.defineStringParam("macMountPath");
+            param->setLabel("Local Mount Path");
+            param->setHint(
+                "Local mount path for the ComfyUI shared directory.\n\n"
+                "macOS example: /Volumes/silo2/002_COMFYUI\n\n"
+                "This path is used by the plugin to access ComfyUI files\n"
+                "on the local filesystem."
+            );
+            std::string defaultPath = "/Volumes/silo2/002_COMFYUI";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("macMountPath")) {
+                defaultPath = configDefaults["server"]["macMountPath"].get<std::string>();
+            }
+        #elif defined(_WIN32) || defined(_WIN64)
+            // Windows build
+            OFX::StringParamDescriptor *param = desc.defineStringParam("winMountPath");
+            param->setLabel("Local Mount Path");
+            param->setHint(
+                "Local mount path for the ComfyUI shared directory.\n\n"
+                "Windows examples:\n"
+                "  Local: C:\\ComfyUI\n"
+                "  Network: \\\\server\\share\\002_COMFYUI\n\n"
+                "This path is used by the plugin to access ComfyUI files\n"
+                "on the local filesystem."
+            );
+            std::string defaultPath = "C:\\ComfyUI";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("winMountPath")) {
+                defaultPath = configDefaults["server"]["winMountPath"].get<std::string>();
+            }
+        #else
+            // Linux build
+            OFX::StringParamDescriptor *param = desc.defineStringParam("linuxMountPath");
+            param->setLabel("Local Mount Path");
+            param->setHint(
+                "Local mount path for the ComfyUI shared directory.\n\n"
+                "Linux example: /mnt/silo2/002_COMFYUI\n\n"
+                "This path is used by the plugin to access ComfyUI files\n"
+                "on the local filesystem."
+            );
+            std::string defaultPath = "/mnt/comfyui";
+            if (configDefaults.contains("server") && configDefaults["server"].contains("linuxMountPath")) {
+                defaultPath = configDefaults["server"]["linuxMountPath"].get<std::string>();
+            }
+        #endif
+
+        param->setStringType(OFX::eStringTypeDirectoryPath);
+        param->setDefault(defaultPath.c_str());
+        param->setAnimates(false);
+        param->setParent(*ioGroup);
+        page->addChild(*param);
+    }
+
+    // ComfyUI Input Directory – OS-specific (I/O group)
+    {
+        #ifdef __APPLE__
+            std::string inputDirDefault = "/Volumes/silo2/002_COMFYUI/in";
+            std::string configKey = "macComfyUIInputDir";
+            std::string examplePath = "/Volumes/silo2/002_COMFYUI/in";
+        #elif defined(_WIN32) || defined(_WIN64)
+            std::string inputDirDefault = "C:\\ComfyUI\\input";
+            std::string configKey = "winComfyUIInputDir";
+            std::string examplePath = "C:\\ComfyUI\\input or \\\\server\\share\\002_COMFYUI\\in";
+        #else
+            std::string inputDirDefault = "/mnt/comfyui/input";
+            std::string configKey = "linuxComfyUIInputDir";
+            std::string examplePath = "/mnt/silo2/002_COMFYUI/in";
+        #endif
+
+        // Try OS-specific config key first, fall back to generic
+        if (configDefaults.contains("server")) {
+            if (configDefaults["server"].contains(configKey)) {
+                inputDirDefault = configDefaults["server"][configKey].get<std::string>();
+            } else if (configDefaults["server"].contains("comfyUIInputDir")) {
+                inputDirDefault = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
+            }
+        }
+
         OFX::StringParamDescriptor *param = desc.defineStringParam("comfyUIInputDir");
         param->setLabels("ComfyUI Input Directory", "ComfyUI Input", "ComfyUI Input Directory");
         param->setHint(
             "Path to ComfyUI's input directory (for auto-loading workflows).\n\n"
             "IMPORTANT: This should match the directory specified in ComfyUI's\n"
             "--input-directory flag when starting the server.\n\n"
-            "Current Setup (Windows server → macOS client):\n"
-            "  Server: --input-directory S:\\002_COMFYUI\\in\n"
-            "  Client: /Volumes/silo2/002_COMFYUI/in\n\n"
-            "Path Mapping Examples:\n"
-            "  S:\\002_COMFYUI\\in → /Volumes/silo2/002_COMFYUI/in\n"
-            "  Z:\\comfy\\in → /Volumes/storage/comfy/in\n\n"
-            "The plugin will copy workflow files here so ComfyUI's /view\n"
-            "endpoint can serve them for auto-loading in the browser.\n\n"
+            "Example: " + examplePath + "\n\n"
+            "The plugin copies workflow files here so ComfyUI's /view endpoint\n"
+            "can serve them for auto-loading in the browser.\n\n"
             "Requires: OFX.AutoLoader extension in ComfyUI/web/extensions/\n"
             "Leave empty to disable auto-loading (manual load required)."
         );
         param->setStringType(OFX::eStringTypeDirectoryPath);
-        // Use config default if available, otherwise fallback to hardcoded default
-        std::string comfyUIInputDirDefault = "/Volumes/silo2/002_COMFYUI/in";
-        if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
-            comfyUIInputDirDefault = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
-        }
-        param->setDefault(comfyUIInputDirDefault.c_str());
+        param->setDefault(inputDirDefault.c_str());
         param->setAnimates(false);
-        if (serverPage) {
-            serverPage->addChild(*param);
-        }
+        param->setParent(*ioGroup);
+        page->addChild(*param);
     }
 
     if (auto logger = spdlog::get("AnyComfy")) {

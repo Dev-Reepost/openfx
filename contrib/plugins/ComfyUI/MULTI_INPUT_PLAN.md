@@ -15,9 +15,9 @@ InputB (Source2): {basename}_B.{frame:04d}.exr
 InputC (Source3): {basename}_C.{frame:04d}.exr
 
 Example:
-/Volumes/silo2/002_COMFYUI/in/project/workflow/v001/shot01.0001.exr      (InputA)
-/Volumes/silo2/002_COMFYUI/in/project/workflow/v001/shot01_B.0001.exr    (InputB)
-/Volumes/silo2/002_COMFYUI/in/project/workflow/v001/shot01_C.0001.exr    (InputC)
+/Volumes/silo2/002_COMFYUI/in/projects/project/workflow/v001/shot01.0001.exr      (InputA)
+/Volumes/silo2/002_COMFYUI/in/projects/project/workflow/v001/shot01_B.0001.exr    (InputB)
+/Volumes/silo2/002_COMFYUI/in/projects/project/workflow/v001/shot01_C.0001.exr    (InputC)
 ```
 
 ### LoadEXR Node Mapping Strategy

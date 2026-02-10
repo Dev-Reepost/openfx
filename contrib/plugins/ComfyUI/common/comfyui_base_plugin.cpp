@@ -13,6 +13,13 @@
 #include <cstring>
 #include <filesystem>
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+// Anchor symbol for dladdr: any address in this shared library's data segment works.
+// A pointer-to-member-function cannot be reinterpret_cast'd to void*, so we use this instead.
+static const char _dladdr_anchor = 0;
+#endif
+
 namespace ComfyUI {
 
 void BasePlugin::initializeLogger()
@@ -1234,10 +1241,10 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::s
 
     // Build path matching output pattern: basename[_suffix].frame.exr
     // Input and output now use the same naming convention for consistency
-    // Example: /Volumes/silo2/002_COMFYUI/in/acme_spot/segmentation/v001/shot01.0001.exr
-    // With suffix: /Volumes/silo2/002_COMFYUI/in/acme_spot/segmentation/v001/shot01_B.0001.exr
+    // Example: /Volumes/silo2/002_COMFYUI/in/projects/acme_spot/segmentation/v001/shot01.0001.exr
+    // With suffix: /Volumes/silo2/002_COMFYUI/in/projects/acme_spot/segmentation/v001/shot01_B.0001.exr
     std::ostringstream filename;
-    filename << mountPath << "/in/"
+    filename << mountPath << "/in/projects/"
              << project << "/"
              << workflow << "/"
              << version << "/"
@@ -1552,10 +1559,10 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
 std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
 {
     // Construct the input file path that was written by writeInputImage()
-    // Pattern: {mountPath}/in/{project}/{workflow}/{version}/{basename}[_suffix].{frame:04d}.exr
+    // Pattern: {mountPath}/in/projects/{project}/{workflow}/{version}/{basename}[_suffix].{frame:04d}.exr
     //
-    // Example: /Volumes/silo2/002_COMFYUI/in/TEST_SAM/segmentation/v001/shot01.0056.exr
-    // With suffix: /Volumes/silo2/002_COMFYUI/in/TEST_SAM/segmentation/v001/shot01_B.0056.exr
+    // Example: /Volumes/silo2/002_COMFYUI/in/projects/TEST_SAM/segmentation/v001/shot01.0056.exr
+    // With suffix: /Volumes/silo2/002_COMFYUI/in/projects/TEST_SAM/segmentation/v001/shot01_B.0056.exr
 
     std::string mountPath, project, workflow, version;
     _macMountPath->getValue(mountPath);
@@ -1568,7 +1575,7 @@ std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
 
     // Construct full path
     std::ostringstream inputPath;
-    inputPath << mountPath << "/in/"
+    inputPath << mountPath << "/in/projects/"
               << project << "/"
               << workflow << "/"
               << version << "/"
@@ -1735,7 +1742,20 @@ std::string BasePlugin::getBundleResourcePath(const std::string& resourceName)
         if (_logger) _logger->debug("Plugin file path: {}", pluginPath);
     } catch (...) {
         if (_logger) _logger->warn("Could not retrieve plugin file path");
-        return "";
+    }
+
+    // Fallback: some hosts (e.g. DaVinci Resolve) do not populate kOfxPluginPropFilePath.
+    // Use dladdr with a symbol from this shared library to get its own dylib path.
+    // (_NSGetExecutablePath would return the host app's path, not the plugin's.)
+    if (pluginPath.empty()) {
+        Dl_info info;
+        if (dladdr(static_cast<const void*>(&_dladdr_anchor), &info) && info.dli_fname) {
+            pluginPath = info.dli_fname;
+            if (_logger) _logger->info("kOfxPluginPropFilePath empty, using dladdr path: {}", pluginPath);
+        } else {
+            if (_logger) _logger->warn("dladdr failed, cannot locate bundle resources");
+            return "";
+        }
     }
 
     // Plugin path format: /path/to/Plugin.ofx.bundle/Contents/MacOS/Plugin.ofx
@@ -2395,7 +2415,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
         // Helper to construct input path with suffix
         auto makeInputPath = [&](const std::string& suffix) {
             std::ostringstream ss;
-            ss << mountPath << "/in/"
+            ss << mountPath << "/in/projects/"
                << projectName << "/"
                << workflowName << "/"
                << version << "/"
@@ -3197,7 +3217,8 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
                                           OFX::PageParamDescriptor *page,
                                           OFX::PageParamDescriptor * /*unused2*/,
                                           OFX::PageParamDescriptor * /*unused3*/,
-                                          const json* configDefaults)
+                                          const json* configDefaults,
+                                          bool skipGroupHeaders)
 {
     // Log config loading status
     auto logger = spdlog::get("comfyui_plugin");
@@ -3216,7 +3237,7 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::GroupParamDescriptor *projectGroup = desc.defineGroupParam("projectGroup");
     projectGroup->setLabel("Project");
     projectGroup->setOpen(true);
-    page->addChild(*projectGroup);
+    if (!skipGroupHeaders) page->addChild(*projectGroup);
 
     // Project name (REQUIRED parameter)
     OFX::StringParamDescriptor *project = desc.defineStringParam("projectName");
@@ -3281,7 +3302,7 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::GroupParamDescriptor *processingGroup = desc.defineGroupParam("processingGroup");
     processingGroup->setLabel("Processing");
     processingGroup->setOpen(true);
-    page->addChild(*processingGroup);
+    if (!skipGroupHeaders) page->addChild(*processingGroup);
 
     // Master enable/disable checkbox
     OFX::BooleanParamDescriptor *enableProcessing = desc.defineBooleanParam("enableProcessing");
@@ -3401,7 +3422,7 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     OFX::GroupParamDescriptor *serverGroup = desc.defineGroupParam("serverGroup");
     serverGroup->setLabel("Server");
     serverGroup->setOpen(false);  // Collapsed by default
-    page->addChild(*serverGroup);
+    if (!skipGroupHeaders) page->addChild(*serverGroup);
 
     OFX::StringParamDescriptor *serverAddr = desc.defineStringParam("serverAddress");
     serverAddr->setLabel("Server Address");

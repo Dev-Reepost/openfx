@@ -55,7 +55,7 @@ public:
 private:
     // AnyComfy-specific parameters
     OFX::PushButtonParam *_createNewWorkflow;  // Button to create template workflow and open browser
-    OFX::PushButtonParam *_openWorkflow;       // Button to open existing workflow in ComfyUI browser
+    OFX::PushButtonParam *_editWorkflow;       // Button to edit existing workflow in ComfyUI browser
     OFX::StringParam     *_comfyUIInputDir;    // ComfyUI input directory path (for auto-loading workflows)
     OFX::StringParam     *_newWorkflowName;    // User-specified name for new workflows (optional)
     OFX::ChoiceParam     *_newWorkflowInputCount;  // Number of inputs for new workflow template (0-3)

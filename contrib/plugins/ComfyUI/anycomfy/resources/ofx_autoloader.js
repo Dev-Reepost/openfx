@@ -145,37 +145,29 @@ console.log("[OFX AutoLoader] Loading extension...");
 
                     console.log("[OFX AutoLoader] ✓ Workflow loaded successfully:", fileName);
 
-                    // Clean up URL parameter
+                    // Publish the path for OFX.AutoSave *before* the URL is cleared.
+                    // ComfyUI calls extension setup() sequentially in name order
+                    // ("OFX.AutoLoader" < "OFX.AutoSave"), so AutoSave's setup()
+                    // has not run yet and the URL param is the only source of truth
+                    // at this point.  Write the shared property and fire the event;
+                    // AutoSave will pick up whichever it sees first.
+                    window.__ofxWorkflowPath = fileName;
+                    window.dispatchEvent(new CustomEvent('ofx:workflow-loaded', { detail: { path: fileName } }));
+                    console.log("[OFX AutoLoader] Published workflow path for AutoSave:", fileName);
+
+                    // Clean up URL parameter (safe now – path is published above)
                     window.history.replaceState({}, document.title, "/");
 
-                    // Show success notification
-                    if (app.extensionManager?.toast) {
-                        app.extensionManager.toast.add({
-                            severity: 'success',
-                            summary: 'Workflow Loaded',
-                            detail: `Successfully loaded: ${fileName}`,
-                            life: 3000
-                        });
-                    } else {
-                        // Fallback to alert for older ComfyUI versions
-                        alert(`✓ Workflow Auto-Loaded!\n\n${fileName}`);
-                    }
+                    // Success notification removed - check console logs instead
+                    console.log("[OFX AutoLoader] ✓ Success notification suppressed (modal popup disabled)");
 
                 } catch (error) {
                     console.error("[OFX AutoLoader] ✗ Error loading workflow:", error);
+                    console.error("[OFX AutoLoader] Failed to auto-load:", fileName);
+                    console.error("[OFX AutoLoader] Please load manually (Ctrl+O or drag-and-drop)");
 
-                    const errorMsg = `Failed to auto-load workflow:\n\n${fileName}\n\nError: ${error.message}\n\nPlease load manually (Ctrl+O or drag-and-drop)`;
-
-                    if (app.extensionManager?.toast) {
-                        app.extensionManager.toast.add({
-                            severity: 'error',
-                            summary: 'Auto-Load Failed',
-                            detail: errorMsg,
-                            life: 8000
-                        });
-                    } else {
-                        alert(errorMsg);
-                    }
+                    // Error notification removed - check console logs instead
+                    console.error("[OFX AutoLoader] ✗ Error notification suppressed (modal popup disabled)");
 
                     // Still clean up URL even on error
                     window.history.replaceState({}, document.title, "/");

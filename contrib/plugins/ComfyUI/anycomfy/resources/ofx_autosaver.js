@@ -25,29 +25,66 @@ app.registerExtension({
         let lastSaveTimestamp = 0;
         let saveInProgress = false;
 
-        // Check if we loaded via ?load_local_json parameter
-        const params = new URLSearchParams(window.location.search);
-        const loadedFileName = params.get('load_local_json');
-
         // Parse path into subfolder and filename
         // e.g., "workflows/my_workflow/my_workflow.json" -> subfolder="workflows/my_workflow", filename="my_workflow.json"
         let subfolder = "";
         let actualFileName = "";
 
-        if (loadedFileName) {
-            originalWorkflowName = loadedFileName;
+        // ---------------------------------------------------------------------------
+        // initTracking – idempotent; may be called from the URL param, the shared
+        // window property that AutoLoader writes, or the custom event it fires.
+        // Whichever source delivers the path first wins; subsequent calls are no-ops.
+        // ---------------------------------------------------------------------------
+        function initTracking(path) {
+            if (originalWorkflowName) return;  // already initialised
 
-            const lastSlash = loadedFileName.lastIndexOf('/');
+            originalWorkflowName = path;
+
+            const lastSlash = path.lastIndexOf('/');
             if (lastSlash !== -1) {
-                subfolder = loadedFileName.substring(0, lastSlash);
-                actualFileName = loadedFileName.substring(lastSlash + 1);
+                subfolder = path.substring(0, lastSlash);
+                actualFileName = path.substring(lastSlash + 1);
             } else {
-                actualFileName = loadedFileName;
+                actualFileName = path;
             }
 
             console.log("[OFX AutoSave] Tracking workflow:", originalWorkflowName);
             console.log("[OFX AutoSave] Subfolder:", subfolder || "(root)");
             console.log("[OFX AutoSave] Filename:", actualFileName);
+        }
+
+        // Source 1: URL parameter (present if AutoSave setup() runs before AutoLoader
+        //           clears it – unlikely in current ComfyUI name-order dispatch, but
+        //           kept for safety and for ComfyUI builds that load extensions in a
+        //           different order).
+        const params = new URLSearchParams(window.location.search);
+        const urlPath = params.get('load_local_json');
+        if (urlPath) {
+            initTracking(urlPath);
+        }
+
+        // Source 2: shared property written by AutoLoader just before it clears the
+        //           URL.  Covers the common case where AutoLoader setup() already ran.
+        if (!originalWorkflowName && window.__ofxWorkflowPath) {
+            initTracking(window.__ofxWorkflowPath);
+        }
+
+        // Source 3: custom event fired by AutoLoader after it publishes the path.
+        //           Covers the (rare) case where neither source above fired yet –
+        //           e.g. if AutoLoader's 2-second delay hasn't elapsed.
+        //           The listener is removed as soon as it fires or after 30 s.
+        if (!originalWorkflowName) {
+            const onLoaded = (e) => {
+                initTracking(e.detail.path);
+                window.removeEventListener('ofx:workflow-loaded', onLoaded);
+                clearTimeout(eventTimeout);
+            };
+            window.addEventListener('ofx:workflow-loaded', onLoaded);
+
+            const eventTimeout = setTimeout(() => {
+                window.removeEventListener('ofx:workflow-loaded', onLoaded);
+                console.log("[OFX AutoSave] No workflow path received within 30 s – auto-save inactive");
+            }, 30000);
         }
 
         // Function to perform the actual save

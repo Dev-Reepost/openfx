@@ -7,6 +7,7 @@
 if(APPLE)
     add_library(AnyComfy MODULE
         anycomfy_plugin.cpp
+        open_url.mm
     )
 else()
     add_library(AnyComfy SHARED
@@ -45,9 +46,9 @@ target_link_libraries(AnyComfy PRIVATE
     miniz::miniz
 )
 
-# Link macOS system frameworks required by httplib
+# Link macOS system frameworks
 if(APPLE)
-    target_link_libraries(AnyComfy PRIVATE "-framework CoreFoundation")
+    target_link_libraries(AnyComfy PRIVATE "-framework CoreFoundation" "-framework AppKit")
 endif()
 
 # For macOS, create .ofx.bundle structure at build time

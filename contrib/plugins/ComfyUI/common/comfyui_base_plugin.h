@@ -153,7 +153,8 @@ public:
                                          OFX::PageParamDescriptor *projectPage,
                                          OFX::PageParamDescriptor *processingPage,
                                          OFX::PageParamDescriptor *serverPage,
-                                         const json* configDefaults = nullptr);
+                                         const json* configDefaults = nullptr,
+                                         bool skipGroupHeaders = false);
 
     // Configuration file management (public for factory access)
     static json loadConfigDefaults();
