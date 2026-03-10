@@ -7,9 +7,18 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdint>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <errno.h>
+
+#ifdef _WIN32
+    #include <direct.h>
+    #include <sys/stat.h>
+    #include <sys/types.h>
+    #define mkdir(path, mode) _mkdir(path)
+    #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#else
+    #include <sys/stat.h>
+    #include <sys/types.h>
+#endif
 
 namespace ComfyUI {
 namespace ImageIO {

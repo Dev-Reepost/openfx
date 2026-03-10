@@ -212,7 +212,7 @@ Low-level utility to combine pre-built arm64 and x86_64 binaries into a universa
     --install
 ```
 
-### setup-env.sh - Environment Setup
+### setup-env.sh - Environment Setup (macOS)
 
 Automated setup of OpenFX development environment (macOS only).
 
@@ -227,9 +227,102 @@ Automated setup of OpenFX development environment (macOS only).
 - Configures development environment
 - Builds OpenFX framework
 
+## Windows Build Tools
+
+### setup-env.ps1 - Windows Environment Setup
+
+Automated setup of OpenFX development environment for Windows.
+
+**Usage:**
+```powershell
+.\contrib\dev-tools\setup-env.ps1
+```
+
+**Features:**
+- Verifies Python 3.8+ installation
+- Installs CMake 3.28+ (via winget if available)
+- Installs Conan 2.1+ via pip
+- Detects Visual Studio Build Tools
+- Creates OFX plugin directory structure
+
+**Options:**
+- `-SkipCMake` - Skip CMake installation check
+- `-SkipConan` - Skip Conan installation
+- `-SkipVS` - Skip Visual Studio Build Tools check
+- `-Help` - Show help message
+
+**Prerequisites:**
+- Windows 10 or later (64-bit)
+- Python 3.8+ - [Download](https://www.python.org/downloads/)
+  - During installation, check "Add Python to PATH"
+- CMake 3.28+ - [Download](https://cmake.org/download/)
+  - During installation, check "Add CMake to system PATH"
+- Visual Studio 2019+ or [Build Tools](https://visualstudio.microsoft.com/downloads/)
+  - Required workload: "Desktop development with C++"
+- Conan 2.1+ - Installed automatically by setup script
+
+### build-windows-plugin.ps1 - Windows Plugin Builder
+
+Build OpenFX plugins natively on Windows for x64 architecture.
+
+**Use this when:**
+- Developing on Windows
+- Building plugins for Windows users
+- Need native Windows x64 binaries
+
+**Usage:**
+```powershell
+.\contrib\dev-tools\build-windows-plugin.ps1 [options]
+```
+
+**Options:**
+- `-Plugin NAME` - Plugin name (default: AnyComfy)
+- `-Target NAME` - CMake target name (default: AnyComfy)
+- `-Clean` - Clean build directory before building
+- `-Install` - Install plugin after building
+- `-InstallDir DIR` - Custom installation directory
+- `-BuildType TYPE` - Build type: Release (default) or Debug
+- `-Verbose` - Show detailed build output
+- `-Help` - Show help message
+
+**Examples:**
+```powershell
+# Build AnyComfy plugin
+.\contrib\dev-tools\build-windows-plugin.ps1 -Plugin AnyComfy -Target AnyComfy
+
+# Build and install to user directory
+.\contrib\dev-tools\build-windows-plugin.ps1 -Plugin AnyComfy -Target AnyComfy -Install
+
+# Clean build with verbose output
+.\contrib\dev-tools\build-windows-plugin.ps1 -Plugin AnyComfy -Target AnyComfy -Clean -Verbose
+
+# Debug build
+.\contrib\dev-tools\build-windows-plugin.ps1 -Plugin AnyComfy -Target AnyComfy -BuildType Debug
+```
+
+**Build time:** 5-10 minutes (first build), 2-5 minutes (incremental)
+
+**Output:** Windows x64 binary (.ofx.bundle with Win64 structure)
+
+**Plugin installation directories:**
+- **User:** `%USERPROFILE%\OFX\Plugins` (recommended for development)
+- **System:** `%ProgramFiles%\Common Files\OFX\Plugins` (requires admin)
+
+**Windows Plugin Bundle Structure:**
+```
+PluginName.ofx.bundle/
+├── Contents/
+│   └── Win64/
+│       └── PluginName.ofx    # 64-bit plugin binary
+└── Resources/                 # Plugin resources (optional)
+    ├── workflows/
+    ├── config/
+    └── *.js
+```
+
 ## Quick Start Workflows
 
-### For Development (Recommended)
+### For Development on macOS/Linux (Recommended)
 
 Fast iterative development on your current machine:
 
@@ -253,35 +346,65 @@ Fast iterative development on your current machine:
 
 4. **Test in your OpenFX host** (Flame, Nuke, etc.)
 
+### For Development on Windows
+
+Fast iterative development on Windows:
+
+1. **Setup environment** (first time only):
+
+   ```powershell
+   .\contrib\dev-tools\setup-env.ps1
+   ```
+
+2. **Build and install AnyComfy plugin**:
+
+   ```powershell
+   .\contrib\dev-tools\build-windows-plugin.ps1 -Plugin AnyComfy -Target AnyComfy -Install
+   ```
+
+3. **Test in your OpenFX host** (DaVinci Resolve, etc.)
+
+**Note:** Plugin creation templates (create-plugin.sh) are currently macOS/Linux only. On Windows, manually create plugin directories or develop on macOS/Linux first.
+
 ### For Distribution
 
-Building plugins for end users (universal binaries):
+Building plugins for end users on multiple platforms:
 
-1. **Build universal macOS binary**:
+1. **Build universal macOS binary** (on macOS):
 
    ```bash
    ./contrib/dev-tools/build-macos-universal-plugin.sh -p MyEffect -t MyEffect-support -i
    ```
 
-2. **Build Linux binary** (if needed):
+2. **Build Windows binary** (on Windows):
+
+   ```powershell
+   .\contrib\dev-tools\build-windows-plugin.ps1 -Plugin MyEffect -Target MyEffect -Install -BuildType Release
+   ```
+
+3. **Build Linux binary** (on macOS with Docker):
 
    ```bash
    ./contrib/dev-tools/build-linux-plugin.sh -p MyEffect -t MyEffect-support --install
    ```
 
-3. **Package and distribute** to users
+4. **Package and distribute** `.ofx.bundle` directories to users for each platform
 
 ## Which Build Script Should I Use?
 
 | Scenario | Script to Use | Why |
 |----------|--------------|-----|
-| **Daily development** | `build-plugin.sh` | Fast (2-5 min), builds for your current machine |
+| **Daily development (macOS/Linux)** | `build-plugin.sh` | Fast (2-5 min), builds for your current machine |
+| **Daily development (Windows)** | `build-windows-plugin.ps1` | Fast (2-5 min), builds for Windows x64 |
 | **Testing on both Mac architectures** | `build-macos-universal-plugin.sh` | Works on Apple Silicon AND Intel Macs |
 | **Distributing to Mac users** | `build-macos-universal-plugin.sh` | Ensures compatibility with all Macs |
+| **Distributing to Windows users** | `build-windows-plugin.ps1` | Native Windows x64 binaries |
 | **Distributing to Linux users** | `build-linux-plugin.sh` | Cross-compiles Linux binaries from macOS |
 | **CI/CD with separate builds** | `combine-universal-binary.sh` | Combines binaries from different build machines |
 
-**In doubt? Use `build-plugin.sh` for development, `build-macos-universal-plugin.sh` for distribution.**
+**In doubt?**
+- **macOS/Linux:** Use `build-plugin.sh` for development, `build-macos-universal-plugin.sh` for distribution
+- **Windows:** Use `build-windows-plugin.ps1` for both development and distribution
 
 ## Directory Structure
 
@@ -294,8 +417,18 @@ contrib/plugins/MyEffect/
 ```
 
 Built plugins are installed to:
+
+**macOS:**
 - **Development**: `~/OFX/Plugins/`
 - **User**: `~/Library/OFX/Plugins/` (for host applications)
+
+**Linux:**
+- **User**: `~/.OFX/Plugins/`
+- **System**: `/usr/OFX/Plugins/`
+
+**Windows:**
+- **User**: `%USERPROFILE%\OFX\Plugins\` (C:\Users\YourName\OFX\Plugins)
+- **System**: `%ProgramFiles%\Common Files\OFX\Plugins\` (requires admin)
 
 ## Integration
 
@@ -303,7 +436,7 @@ All plugins in `contrib/plugins/` are automatically discovered by the build syst
 
 ## Troubleshooting
 
-### Common Issues
+### Common Issues (macOS/Linux)
 
 **Build fails with missing dependencies:**
 ```bash
@@ -323,5 +456,95 @@ ls ~/OFX/Plugins/
 # Clean build and try again
 ./contrib/dev-tools/build-plugin.sh MyPlugin MyPlugin-support --clean
 ```
+
+### Windows-Specific Issues
+
+**CMake Not Found:**
+```powershell
+# Install CMake from https://cmake.org/download/
+# During installation, select "Add CMake to system PATH for all users"
+# Restart PowerShell and verify
+cmake --version
+```
+
+**Conan Not Found:**
+```powershell
+# Install Conan via pip
+python -m pip install "conan>=2.1"
+conan profile detect --force
+```
+
+**Visual Studio Build Tools Missing:**
+
+Error: Build fails with "MSVC compiler not found"
+
+Solution:
+1. Install [Visual Studio 2019 or later](https://visualstudio.microsoft.com/downloads/)
+2. During installation, select workload: "Desktop development with C++"
+3. Restart terminal after installation
+
+**Conan Dependencies Fail to Build:**
+
+The build script automatically retries with `--build=*` to build from source. If problems persist:
+
+```powershell
+# Manually install dependencies with debug output
+cd <OpenFX-root>
+conan install . -s build_type=Release -s arch=x86_64 --build=missing `
+    -o "&:build_comfyui_plugins=True" -of=build\windows -vv
+```
+
+**Permission Denied Errors:**
+- For user directory (`%USERPROFILE%\OFX\Plugins`): No admin required
+- For system directory (`%ProgramFiles%\...`): Run PowerShell as Administrator
+  ```powershell
+  Start-Process powershell -Verb runAs
+  ```
+
+**OpenSSL DLL Missing at Runtime:**
+
+Plugin fails to load in host application. Verify DLLs are in bundle:
+
+```
+AnyComfy.ofx.bundle/Contents/Win64/
+├── AnyComfy.ofx
+├── libssl-3-x64.dll      # Should be present
+└── libcrypto-3-x64.dll   # Should be present
+```
+
+If missing, rebuild or manually copy from Conan cache.
+
+**Plugin not appearing in host application (Windows):**
+```powershell
+# Check installation directories
+dir "$env:USERPROFILE\OFX\Plugins"
+dir "$env:ProgramFiles\Common Files\OFX\Plugins"
+
+# Check Windows Event Viewer for DLL loading errors
+```
+
+## Platform Notes
+
+### macOS vs Windows Build Compatibility
+
+The Windows build scripts are **completely independent** from macOS/Linux scripts:
+
+- **Windows:** Uses `build-windows-plugin.ps1` (PowerShell)
+- **macOS:** Uses `build-macos-universal-plugin.sh` (Bash)
+- **Linux:** Uses `build-linux-plugin.sh` (Docker)
+
+The `CMakeLists.txt` has platform-specific sections that don't interfere:
+
+```cmake
+if(APPLE)
+    # macOS-specific bundle creation
+endif()
+
+if(WIN32)
+    # Windows-specific bundle creation (doesn't affect macOS)
+endif()
+```
+
+Building on Windows **does not affect** macOS builds or vice versa. All platforms use separate build directories.
 
 For more help, see the main [OpenFX documentation](../../Documentation/) or [CLAUDE.md](../../CLAUDE.md).

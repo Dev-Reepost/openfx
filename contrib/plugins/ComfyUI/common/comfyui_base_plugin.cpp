@@ -13,6 +13,13 @@
 #include <cstring>
 #include <filesystem>
 
+#ifdef _WIN32
+    #include <sys/stat.h>
+    #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#else
+    #include <sys/stat.h>
+#endif
+
 #ifdef __APPLE__
 #include <dlfcn.h>
 // Anchor symbol for dladdr: any address in this shared library's data segment works.

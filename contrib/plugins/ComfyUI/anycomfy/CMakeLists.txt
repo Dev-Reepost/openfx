@@ -99,4 +99,23 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
+# For Windows, create .ofx.bundle structure at build time
+if(WIN32)
+    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/Win64")
+    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Resources")
+
+    add_custom_command(TARGET AnyComfy POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AnyComfy> "${BUNDLE_DIR}/"
+
+        # Copy resources (Windows uses Resources/ at bundle root level like Linux)
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCES_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+            "${RESOURCES_DIR}"
+
+        COMMENT "Creating AnyComfy.ofx.bundle structure with resources (Windows)"
+    )
+endif()
+
 message(STATUS "ComfyUI AnyComfy plugin configured with bundled resources")
