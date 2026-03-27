@@ -55,6 +55,12 @@ add_subdirectory(tests)
 
 # Concrete plugin implementations
 add_subdirectory(segmentation)
+add_subdirectory(segmentation_sam3)
+add_subdirectory(depth_da3)
+add_subdirectory(depth_crafter)
+add_subdirectory(matte_mama)
+add_subdirectory(matte_ma2)
+add_subdirectory(upscale_seedvr2)
 add_subdirectory(anycomfy)
 
 # Future plugins:
