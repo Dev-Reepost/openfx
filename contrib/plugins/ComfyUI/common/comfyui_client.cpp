@@ -94,10 +94,10 @@ std::string Client::queuePrompt(const json& workflow, const std::string& clientI
 
         // Build request payload matching ComfyUI API format
         auto buildStart = std::chrono::steady_clock::now();
-        json payload = {
-            {"prompt", workflow},
-            {"client_id", clientId}
-        };
+        json payload = {{"prompt", workflow}};
+        if (!clientId.empty()) {
+            payload["client_id"] = clientId;
+        }
 
         std::string body = payload.dump();
 

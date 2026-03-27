@@ -87,10 +87,8 @@ void AsyncJobManager::submitJob(int frame, const json& workflow, const std::stri
 
     // Submit to ComfyUI (may throw exception)
     auto queueStartTime = std::chrono::steady_clock::now();
-    std::string clientId = _comfyClient->getClientId();
-
     if (_logger) _logger->info("  Calling ComfyUI queuePrompt()...");
-    std::string promptId = _comfyClient->queuePrompt(workflow, clientId);
+    std::string promptId = _comfyClient->queuePrompt(workflow, "");
 
     auto queueEndTime = std::chrono::steady_clock::now();
     auto queueDuration = std::chrono::duration_cast<std::chrono::milliseconds>(queueEndTime - queueStartTime);
@@ -212,8 +210,7 @@ void AsyncJobManager::submitJobAsync(int frame,
             // Submit to ComfyUI
             auto submitStartTime = std::chrono::steady_clock::now();
 
-            std::string clientId = _comfyClient->getClientId();
-            std::string promptId = _comfyClient->queuePrompt(workflow, clientId);
+            std::string promptId = _comfyClient->queuePrompt(workflow, "");
 
             auto submitDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - submitStartTime);
@@ -701,12 +698,14 @@ bool AsyncJobManager::checkJobCompletion(AsyncJob& job)
                         }
                         return true;
                     } else {
-                        // Success reported but file missing
+                        // Success reported but file missing - log full history for diagnosis
                         job.status = JobStatus::FAILED;
                         job.errorMessage = "Output file not found: " + job.outputPath;
                         if (_logger) {
                             _logger->error("AsyncJobManager: Frame {} - output file missing: {}",
                                           job.frame, job.outputPath);
+                            _logger->error("AsyncJobManager: ComfyUI history response (for diagnosis): {}",
+                                          history.dump(2));
                         }
                         return true;
                     }

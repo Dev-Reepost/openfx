@@ -922,10 +922,7 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     // Step 4: Queue workflow to ComfyUI
     if (_logger) _logger->info("Step 4: Queueing workflow to ComfyUI server");
     progressUpdate(0.25);
-    std::string clientId = _comfyClient->getClientId();
-    if (_logger) _logger->info("Client ID: {}", clientId);
-
-    std::string promptId = _comfyClient->queuePrompt(workflow, clientId);
+    std::string promptId = _comfyClient->queuePrompt(workflow, "");
     if (_logger) _logger->info("Workflow queued with prompt ID: {}", promptId);
 
     // Step 5: Wait for execution (using polling instead of WebSocket to avoid crashes)
@@ -1513,23 +1510,12 @@ std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
     // Replace all forward slashes with backslashes
     std::replace(windowsPath.begin(), windowsPath.end(), '/', '\\');
 
-    if (_logger) _logger->info("  Windows path (before JSON escaping): {}", windowsPath);
+    if (_logger) _logger->info("  Windows path: {}", windowsPath);
 
-    // CRITICAL: Escape backslashes for JSON (\ -> \\)
-    // JSON requires backslashes to be escaped
-    // Example: Z:\in\test.exr -> Z:\\in\\test.exr
-    std::string jsonPath;
-    jsonPath.reserve(windowsPath.length() * 2);  // Reserve space for worst case
-    for (char c : windowsPath) {
-        if (c == '\\') {
-            jsonPath += "\\\\";  // Escape backslash
-        } else {
-            jsonPath += c;
-        }
-    }
-
-    if (_logger) _logger->info("  Final JSON-escaped path: {}", jsonPath);
-    return jsonPath;
+    // Return the raw Windows path. nlohmann/json escapes backslashes automatically
+    // when this string is assigned to a JSON field. The customizeWorkflow() string-
+    // replacement path is responsible for escaping when substituting into raw JSON text.
+    return windowsPath;
 }
 
 std::string BasePlugin::constructExpectedOutputPath(int frame)
@@ -1905,6 +1891,19 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
     // Convert the workflow to a string for placeholder replacement
     std::string workflowStr = baseWorkflow.dump();
 
+    // Helper: escape backslashes for insertion into raw JSON text.
+    // convertPathForComfyUI() returns a raw Windows path; when substituting into
+    // a JSON string (obtained via dump()), backslashes must be doubled manually.
+    auto jsonEscape = [](const std::string& path) {
+        std::string escaped;
+        escaped.reserve(path.size() * 2);
+        for (char c : path) {
+            if (c == '\\') escaped += "\\\\";
+            else            escaped += c;
+        }
+        return escaped;
+    };
+
     // Get parameters for replacements
     std::string mountPath, project, workflowName, version;
     _macMountPath->getValue(mountPath);
@@ -1919,8 +1918,8 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
     outputPrefix << mountPath << "/out/" << project << "/" << workflowName
                  << "/" << version << "/" << basename;
 
-    // Convert paths for ComfyUI
-    std::string comfyOutputPrefix = convertPathForComfyUI(outputPrefix.str());
+    // Convert paths for ComfyUI and escape for raw JSON string substitution
+    std::string comfyOutputPrefix = jsonEscape(convertPathForComfyUI(outputPrefix.str()));
 
     // Common placeholder replacements
     // ${INPUT_PATH} - primary input EXR (legacy, backward compatible, same as INPUT_PATH_A)
@@ -1944,7 +1943,7 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
 
     for (const auto& [placeholderStr, inputId] : placeholderMap) {
         if (inputPaths.count(inputId) > 0) {
-            std::string comfyInputPath = convertPathForComfyUI(inputPaths.at(inputId));
+            std::string comfyInputPath = jsonEscape(convertPathForComfyUI(inputPaths.at(inputId)));
             if (_logger) _logger->debug("Replacing {} with: {}", placeholderStr, comfyInputPath);
             replaceCount = 0;
             while ((pos = workflowStr.find(placeholderStr)) != std::string::npos) {
@@ -3301,7 +3300,11 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     workflowFile->setLabel("Workflow File");
     workflowFile->setHint("Path to workflow JSON file. Use 'resources/workflows/filename.json' for bundled workflows, or absolute path for custom workflows. Leave empty to use hardcoded workflow.");
     workflowFile->setStringType(OFX::eStringTypeFilePath);
-    workflowFile->setDefault("resources/workflows/sam_segmentation.json");
+    std::string workflowFileDefault = "resources/workflows/sam_segmentation.json";
+    if (configDefaults && configDefaults->contains("project") && (*configDefaults)["project"].contains("workflowFile")) {
+        workflowFileDefault = (*configDefaults)["project"]["workflowFile"].get<std::string>();
+    }
+    workflowFile->setDefault(workflowFileDefault.c_str());
     workflowFile->setParent(*projectGroup);
     page->addChild(*workflowFile);
 
