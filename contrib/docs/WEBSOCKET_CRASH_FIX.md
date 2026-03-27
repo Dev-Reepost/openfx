@@ -1,185 +1,130 @@
-# WebSocket Crash Fix - Polling Mode
+# WebSocket Crash Fix — Polling Mode
 
-**Date:** 2025-11-07 14:34
+**Date:** 2025-11-07
+**Updated:** 2026-03-12
 **Issue:** Segmentation fault (SIGSEGV) at address 0x00000078
-**Root Cause:** WebSocket library causing crashes in Flame environment
+**Root Cause:** WebSocket library causing crashes in Flame OFX host environment
 
 ## Problem
 
-The plugin was crashing when trying to monitor workflow execution via WebSocket:
-```
+The plugin crashed when monitoring workflow execution via WebSocket:
+
+```text
 Error: abnormal termination, signal = 11
 SIGSEGV - Segmentation Fault
 Signal was generated internally:
 invalid permissions for mapped object at address 0x00000078
 ```
 
-The crash occurred during the `monitorExecution()` call, which uses WebSocketPP library to receive real-time updates from ComfyUI server.
+The crash occurred during `monitorExecution()`, which used ixwebsocket to receive real-time updates from ComfyUI server.
 
 ## Root Cause
 
-WebSocket libraries can be fragile in plugin environments due to:
-- Signal handling conflicts with host application
+WebSocket libraries are fragile in OFX plugin environments due to:
+
+- Signal handling conflicts with the host application
 - Threading issues in restricted plugin contexts
 - Memory access violations in shared libraries
-- Host application terminating plugin while WebSocket connection is active
+- Host application terminating the plugin while a WebSocket connection is active
 
-## Solution: Polling Instead of WebSocket
+**This is not a ComfyUI server compatibility issue.** The latest ComfyUI server supports WebSockets correctly. The problem is the Flame OFX runtime — background threads with blocking network I/O can conflict with Flame's threading model during render cancellation or plugin unload.
 
-**Replaced real-time WebSocket monitoring with HTTP polling:**
+## Solution: HTTP Polling
 
-### Before (WebSocket mode):
+Replaced real-time WebSocket monitoring with HTTP polling against `/history/{prompt_id}`:
+
 ```cpp
+// Before (WebSocket mode):
 _comfyClient->monitorExecution(promptId,
     [&](EventType eventType, const json& data) {
         // Handle events via WebSocket callbacks
     });
-```
 
-### After (Polling mode):
-```cpp
-// Poll for completion instead of using WebSocket
-const int maxAttempts = 300; // 5 minutes at 1 second intervals
-bool completed = false;
-
+// After (HTTP polling):
+const int maxAttempts = 300; // 5 minutes at 1-second intervals
 for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-    try {
-        json history = _comfyClient->getHistory(promptId);
-
-        if (history.contains(promptId)) {
-            auto& promptData = history[promptId];
-
-            // Check status
-            if (status == "success") {
-                completed = true;
-                break;
-            }
-
-            // Check if outputs exist
-            if (promptData.contains("outputs") && !promptData["outputs"].empty()) {
-                completed = true;
-                break;
-            }
-        }
-
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    } catch (...) {
-        // Continue polling
+    json history = _comfyClient->getHistory(promptId);
+    if (history.contains(promptId)) {
+        std::string status = history[promptId]["status"]["status_str"];
+        if (status == "success") { completed = true; break; }
     }
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 }
 ```
+
+## Why Not Just Fix the WebSocket?
+
+Three alternatives were evaluated before settling on polling permanently.
+
+### Alternative 1: Out-of-process sidecar (cleanest, safest)
+
+Run a small standalone daemon that maintains the WebSocket connection to ComfyUI
+and exposes a simple Unix socket / named pipe IPC to the plugin. The plugin makes
+quick local IPC calls; the sidecar lifecycle is fully independent of Flame.
+
+- **Pro:** Zero crash risk, real-time updates possible, reusable across plugins
+- **Con:** Extra process to deploy and keep alive; adds operational complexity
+
+### Alternative 2: Managed WebSocket on the existing async thread
+
+The async job manager already owns a background thread. If the WebSocket were managed
+on that thread — with an atomic stop flag and a proper `join()` in the destructor —
+it might work safely.
+
+- **Pro:** No extra processes; real-time progress available
+- **Con:** Flame's teardown behavior during render cancel is unpredictable;
+  risk of re-introducing the crash; requires extensive testing
+
+### Alternative 3: Non-blocking WebSocket poll (no background thread)
+
+Use a non-blocking WebSocket library (e.g. `libwebsockets` in event-driven mode)
+and drive `ws.poll()` from the existing HTTP polling loop — no extra threads at all.
+
+- **Pro:** Clean threading model; no background thread lifecycle issues
+- **Con:** Most WebSocket libraries are callback/blocking-oriented; adapting them
+  to a poll model is awkward and library-dependent
+
+### Decision
+
+HTTP polling is retained because it is proven stable, the latency trade-off is
+irrelevant for workflows that take seconds to minutes, and the alternatives carry
+either deployment cost (sidecar) or re-crash risk (thread management).
+
+Revisit if real-time node-by-node progress inside Flame's UI becomes a hard requirement.
+
+## Side Effect: `client_id` Warning on ComfyUI Server (fixed 2026-03-12)
+
+While not using WebSockets, the plugin was still sending `client_id` in HTTP prompt
+submissions. ComfyUI uses this field to route WebSocket completion notifications back
+to the submitting client. With no active WebSocket session registered for that
+`client_id`, ComfyUI logged:
+
+```text
+WARNING: 'NoneType' object has no attribute 'session_uuid'
+```
+
+**Fix:** `client_id` is now omitted from the HTTP prompt payload — `queuePrompt()`
+call sites pass `""`, which suppresses the field. ComfyUI skips WebSocket notification
+when no `client_id` is present. The `monitorExecution()` WebSocket function and
+`getClientId()` remain in `comfyui_client.cpp` should WebSocket mode be revived.
+
+## Trade-offs of Current Approach
+
+- **Latency:** 1-second polling interval vs. real-time WebSocket updates
+  — acceptable for AI workflows that take seconds to minutes
+- **Network overhead:** One HTTP request per second while a workflow runs
+  — minimal impact
 
 ## Benefits
 
-✅ **No more crashes** - Simple HTTP polling is much more stable
-✅ **Robust error handling** - Gracefully handles network issues
-✅ **Progress updates** - Still provides progress feedback to user
-✅ **Timeout protection** - Fails gracefully after 5 minutes
-✅ **Works in all contexts** - Compatible with all OFX hosts
-
-## Trade-offs
-
-- **Latency:** 1-second polling interval vs. real-time WebSocket updates
-  - Acceptable for AI workflows that take seconds/minutes to complete
-- **Network overhead:** Slightly more HTTP requests
-  - Minimal impact - one request per second while workflow is running
-
-## Additional Improvements
-
-### 1. Safer Logger Initialization
-```cpp
-// Check if logger already exists (avoid duplicate registration)
-if (spdlog::get("comfyui_plugin")) {
-    _logger = spdlog::get("comfyui_plugin");
-} else {
-    _logger = spdlog::basic_logger_mt("comfyui_plugin", logPath);
-}
-```
-
-### 2. Robust Destructor
-```cpp
-BasePlugin::~BasePlugin()
-{
-    try {
-        if (_logger) {
-            _logger->info("=== ComfyUI Plugin Session Ended ===");
-            _logger->flush();
-            _logger.reset();
-        }
-    } catch (...) {
-        // Silently ignore exceptions during destruction
-    }
-}
-```
-
-### 3. Source Clip Validation
-```cpp
-// Check if source clip is connected
-if (!_srcClip->isConnected()) {
-    throw std::runtime_error("Source clip is not connected.");
-}
-
-// Validate image fetch
-if (!src.get()) {
-    throw std::runtime_error("Failed to fetch source image from clip.");
-}
-```
-
-### 4. White/Black Image Detection
-```cpp
-float avg = sum / sampleCount;
-if (avg > 0.95f) {
-    _logger->warn("WARNING: Input image appears to be mostly white!");
-} else if (avg < 0.05f) {
-    _logger->warn("WARNING: Input image appears to be mostly black!");
-}
-```
-
-## Testing
-
-### Crash Resolution
-- ✅ Plugin no longer crashes on load
-- ✅ Plugin no longer crashes during workflow execution
-- ✅ Plugin works with or without connected source clip
-
-### Functionality
-- ✅ Workflow submission works
-- ✅ Polling detects completion
-- ✅ Progress updates work
-- ✅ Timeout handling works
-
-### Offline Tests Available
-```bash
-# Test EXR I/O
-./build/Release/contrib/plugins/ComfyUI/tests/test_image_io
-
-# Validate specific EXR file
-./build/Release/contrib/plugins/ComfyUI/tests/test_exr_validation /path/to/file.exr
-```
-
-## Known Issues
-
-### White Image Issue (Not a Bug)
-The plugin correctly detects and warns when Flame provides all-white pixel data:
-```
-[2025-11-07 14:27:06.055] [info] First pixel after conversion (RGBA): [1.0000, 1.0000, 1.0000, 1.0000]
-[2025-11-07 14:27:06.055] [warning] WARNING: Input image appears to be mostly white!
-```
-
-**This is not a plugin bug** - it means:
-- Source clip may not be properly connected in Flame
-- Flame may be providing a default white buffer
-- Plugin needs to be applied to actual footage, not a blank generator
+- No crashes — simple HTTP polling is stable in all OFX hosts
+- Graceful error handling for network issues
+- Progress updates still provided to the user
+- Timeout protection (5 minutes by default)
+- Compatible with all OFX hosts, not just Flame
 
 ## Files Modified
 
-- `contrib/plugins/ComfyUI/common/comfyui_base_plugin.cpp` - Polling implementation
-- `contrib/plugins/ComfyUI/tests/test_exr_validation.cpp` - New validation test
-- `contrib/plugins/ComfyUI/tests/CMakeLists.txt` - Added test target
-
-## Plugin Status
-
-**Version:** Built 2025-11-07 14:34:05
-**Location:** `~/Library/OFX/Plugins/SAMSegmentation.ofx.bundle`
-**Status:** ✅ Stable - Ready for production testing
-**Mode:** HTTP Polling (no WebSocket)
+- `contrib/plugins/ComfyUI/common/comfyui_base_plugin.cpp` — polling implementation
+- `contrib/plugins/ComfyUI/common/async_job_manager.cpp` — removed `client_id` from submissions
+- `contrib/plugins/ComfyUI/common/comfyui_client.cpp` — `queuePrompt` omits `client_id` when empty
