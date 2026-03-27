@@ -66,10 +66,6 @@ get_plugin_paths() {
             ;;
     esac
 
-    # Use DEV_PLUGIN_DIR as default if INSTALL_DIR not already set via --install-dir
-    if [[ -z "$INSTALL_DIR" ]]; then
-        INSTALL_DIR="$DEV_PLUGIN_DIR"
-    fi
 }
 
 # Function to show usage
@@ -81,19 +77,19 @@ show_usage() {
     echo "  target-name         CMake target name (defaults to directory name)"
     echo
     echo "Options:"
-    echo "  -d, --debug         Build in debug mode"
-    echo "  -c, --clean         Clean build before building"
-    echo "  -i, --install       Install to system directory (requires sudo)"
-    echo "  -v, --verbose       Verbose build output"
-    echo "  --bundle-name NAME  Custom bundle name (defaults to target name)"
-    echo "  --install-dir DIR   Custom installation directory"
-    echo "  -h, --help          Show this help message"
+    echo "  -d, --debug              Build in debug mode"
+    echo "  -c, --clean              Clean build before building"
+    echo "  -i, --install            Install to user OFX library (~/Library/OFX/Plugins on macOS)"
+    echo "  --install-dir DIR        Install to custom directory (implies -i)"
+    echo "  -v, --verbose            Verbose build output"
+    echo "  --bundle-name NAME       Custom bundle name (defaults to target name)"
+    echo "  -h, --help               Show this help message"
     echo
     echo "Examples:"
-    echo "  $0 MyFirstPlugin                           # Build MyFirstPlugin with default target"
-    echo "  $0 MyFirstPlugin MyFirstBrightness.ofx     # Build with specific target name"
-    echo "  $0 Examples/Invert -d -v                   # Debug build with verbose output"
-    echo "  $0 CustomPlugin --bundle-name MyEffect     # Custom bundle name"
+    echo "  $0 contrib/plugins/ComfyUI/depth_da3 DepthAnythingV3        # Build only"
+    echo "  $0 contrib/plugins/ComfyUI/depth_da3 DepthAnythingV3 -i     # Build and install"
+    echo "  $0 Examples/Invert -d -v                                     # Debug build"
+    echo "  $0 MyPlugin MyTarget --install-dir /Library/OFX/Plugins      # System install"
 }
 
 # Default values
@@ -102,11 +98,12 @@ TARGET_NAME=""
 BUNDLE_NAME=""
 BUILD_TYPE="Release"
 CLEAN_BUILD=false
-INSTALL_SYSTEM=false
+DO_INSTALL=false
+INSTALL_DIR=""
 VERBOSE=""
-OPENFX_ROOT="${OPENFX_ROOT:-$(pwd)}"
-INSTALL_DIR="$HOME/OFX/Plugins"
-# Initialize plugin paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENFX_ROOT="${OPENFX_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# Initialize platform-specific path variables (SYSTEM_PLUGIN_DIR, USER_INSTALL_DIR, DEV_PLUGIN_DIR)
 get_plugin_paths
 
 # Parse command line arguments
@@ -121,7 +118,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -i|--install)
-            INSTALL_SYSTEM=true
+            DO_INSTALL=true
             shift
             ;;
         -v|--verbose)
@@ -134,6 +131,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --install-dir)
             INSTALL_DIR="$2"
+            DO_INSTALL=true
             shift 2
             ;;
         -h|--help)
@@ -249,17 +247,20 @@ configure_cmake() {
 
     # Detect if this is a ComfyUI plugin
     local is_comfyui_plugin=false
-    local conan_options=""
+    local conan_extra_args=()
     if [[ "$PLUGIN_DIR" == *"ComfyUI"* ]]; then
         is_comfyui_plugin=true
-        conan_options="-o \"&:build_comfyui_plugins=True\""
+        conan_extra_args=(-o "&:build_comfyui_plugins=True")
         log_info "Detected ComfyUI plugin - enabling ComfyUI dependencies"
     fi
 
     # Install Conan dependencies and generate build files if needed
     if [[ ! -f "build/$BUILD_TYPE/generators/CMakePresets.json" ]] || [[ "$is_comfyui_plugin" == true ]]; then
         log_info "Installing Conan dependencies..."
-        conan install -s build_type=$BUILD_TYPE -pr:b=default $conan_options --build=missing .
+        if ! conan install -s build_type=$BUILD_TYPE -pr:b=default "${conan_extra_args[@]}" --build=missing .; then
+            log_warning "Conan install with --build=missing failed, retrying with --build='*' (builds all from source)..."
+            conan install -s build_type=$BUILD_TYPE -pr:b=default "${conan_extra_args[@]}" --build="*" .
+        fi
     fi
 
     # Additional CMake flags
@@ -282,12 +283,12 @@ build_plugin() {
     cd "$OPENFX_ROOT"
     
     # Try to build the specific target first
-    if cmake --build "build/$BUILD_TYPE" --config "$BUILD_TYPE" --target "$TARGET_NAME" $VERBOSE; then
+    if cmake --build "build/$BUILD_TYPE" --config "$BUILD_TYPE" --target "$TARGET_NAME" --parallel $VERBOSE; then
         log_success "Plugin target built successfully"
     else
         # If specific target fails, try building all targets in the plugin directory
         log_info "Direct target build failed, trying to build all targets..."
-        if cmake --build "build/$BUILD_TYPE" --config "$BUILD_TYPE" $VERBOSE; then
+        if cmake --build "build/$BUILD_TYPE" --config "$BUILD_TYPE" --parallel $VERBOSE; then
             log_success "Build completed (all targets)"
         else
             log_error "Plugin build failed"
@@ -363,111 +364,105 @@ find_plugin_binary() {
     echo "$plugin_binary"
 }
 
-# Create plugin bundle
-create_bundle() {
+# Locate the cmake-generated bundle or construct one from the raw binary.
+# Outputs the bundle path to stdout; all other output goes to stderr.
+locate_or_create_bundle() {
     local plugin_binary="$1"
     local bundle_name="${BUNDLE_NAME}.ofx.bundle"
-    local bundle_path="$INSTALL_DIR/$bundle_name"
     local binary_name
     binary_name=$(basename "$plugin_binary")
-    
-    log_info "Creating plugin bundle: $bundle_name" >&2
-    
-    # Create bundle directory structure (cross-platform)
-    get_plugin_paths
+
+    # Prefer the cmake-generated bundle — it already has Info.plist (macOS-only,
+    # generated by cmake) and Resources correctly in place.
+    local cmake_bundle
+    cmake_bundle=$(find "$OPENFX_ROOT/build/$BUILD_TYPE" -name "${TARGET_NAME}.ofx.bundle" -type d 2>/dev/null | head -1)
+
+    if [[ -n "$cmake_bundle" && -d "$cmake_bundle/Contents" ]]; then
+        log_info "Using cmake-generated bundle: $cmake_bundle" >&2
+        { file "$(find "$cmake_bundle" -name "*.ofx" -type f | head -1)"; } >&2
+        echo "$cmake_bundle"
+        return
+    fi
+
+    # Fallback: construct bundle manually from the raw binary
+    log_warning "No cmake bundle found, constructing bundle from binary" >&2
+    local bundle_path="$OPENFX_ROOT/build/$BUILD_TYPE/$bundle_name"
+
     case "$PLATFORM" in
         macos)
             mkdir -p "$bundle_path/Contents/MacOS"
-            BUNDLE_BINARY_DIR="$bundle_path/Contents/MacOS"
+            cp "$plugin_binary" "$bundle_path/Contents/MacOS/"
+            chmod +x "$bundle_path/Contents/MacOS/$binary_name"
             ;;
         linux|windows)
             mkdir -p "$bundle_path/Contents/Linux-x86-64"
-            BUNDLE_BINARY_DIR="$bundle_path/Contents/Linux-x86-64"
+            cp "$plugin_binary" "$bundle_path/Contents/Linux-x86-64/"
+            chmod +x "$bundle_path/Contents/Linux-x86-64/$binary_name"
             ;;
     esac
-    
-    # Copy plugin binary to bundle
-    cp "$plugin_binary" "$BUNDLE_BINARY_DIR/"
-    
-    # Verify the binary was copied
-    local copied_binary="$BUNDLE_BINARY_DIR/$binary_name"
-    if [[ -f "$copied_binary" ]]; then
-        log_success "Plugin bundle created: $bundle_path" >&2
-        
-        # Show binary info
-        log_info "Binary info:" >&2
-        file "$copied_binary" >&2
-        
-        # Make executable
-        chmod +x "$copied_binary"
-    else
-        log_error "Failed to create plugin bundle" >&2
-        exit 1
-    fi
-    
+
+    log_success "Bundle created: $bundle_path" >&2
+    { file "$(find "$bundle_path" -name "*.ofx" -type f | head -1)"; } >&2
     echo "$bundle_path"
 }
 
-# Install plugin
+# Install the bundle to the target directory
 install_plugin() {
     local bundle_path="$1"
 
-    log_info "Installing plugin..."
-
-    # The bundle is already created in the correct location by create_bundle()
-    # We only need to handle system installation if requested
-    log_success "Plugin installed: $bundle_path"
-
-    # Install to system directory if requested
-    if [[ "$INSTALL_SYSTEM" == true ]]; then
-        log_info "Installing to system directory (requires sudo)..."
-        get_plugin_paths
-        sudo mkdir -p "$SYSTEM_PLUGIN_DIR"
-        sudo cp -r "$bundle_path" "$SYSTEM_PLUGIN_DIR/"
-        log_success "Plugin installed system-wide: $SYSTEM_PLUGIN_DIR/$(basename "$bundle_path")"
+    if [[ "$DO_INSTALL" != true ]]; then
+        log_info "Bundle ready (not installed). Use -i to install to $USER_INSTALL_DIR"
+        return
     fi
+
+    # If --install-dir was not set, default to the user OFX library
+    local target_dir="${INSTALL_DIR:-$USER_INSTALL_DIR}"
+    local bundle_name
+    bundle_name=$(basename "$bundle_path")
+
+    log_info "Installing to $target_dir ..."
+    mkdir -p "$target_dir"
+    rm -rf "$target_dir/$bundle_name"
+    cp -r "$bundle_path" "$target_dir/"
+    log_success "Plugin installed: $target_dir/$bundle_name"
 }
 
 # Verify installation
 verify_installation() {
+    if [[ "$DO_INSTALL" != true ]]; then
+        return
+    fi
+
+    local target_dir="${INSTALL_DIR:-$USER_INSTALL_DIR}"
     local bundle_name="${BUNDLE_NAME}.ofx.bundle"
-    
+
     log_info "Verifying installation..."
-    
-    # Check user installation
-    if [[ -d "$USER_INSTALL_DIR/$bundle_name" ]]; then
-        log_success "Plugin found in user library: $USER_INSTALL_DIR/$bundle_name"
+    if [[ -d "$target_dir/$bundle_name" ]]; then
+        log_success "Plugin found at: $target_dir/$bundle_name"
     else
-        log_warning "Plugin not found in user library"
+        log_warning "Plugin not found at expected location: $target_dir/$bundle_name"
     fi
-    
-    # Check system installation if requested
-    if [[ "$INSTALL_SYSTEM" == true ]] && [[ -d "/Library/OFX/Plugins/$bundle_name" ]]; then
-        log_success "Plugin found in system library: /Library/OFX/Plugins/$bundle_name"
-    fi
-    
-    log_success "Installation verification completed"
 }
 
 # Print summary
 print_summary() {
+    local bundle_path="$1"
     echo
-    log_success "Plugin build and installation completed!"
+    log_success "Plugin build completed!"
     echo
     echo "Summary:"
     echo "  Plugin Directory: $PLUGIN_DIR"
-    echo "  Target Name: $TARGET_NAME"
-    echo "  Bundle Name: $BUNDLE_NAME"
-    echo "  Build Type: $BUILD_TYPE"
-    echo "  User Install: $INSTALL_DIR/${BUNDLE_NAME}.ofx.bundle"
-    if [[ "$INSTALL_SYSTEM" == true ]]; then
-        echo "  System Install: $SYSTEM_PLUGIN_DIR/${BUNDLE_NAME}.ofx.bundle"
+    echo "  Target Name:      $TARGET_NAME"
+    echo "  Bundle:           $bundle_path"
+    echo "  Build Type:       $BUILD_TYPE"
+    if [[ "$DO_INSTALL" == true ]]; then
+        local target_dir="${INSTALL_DIR:-$USER_INSTALL_DIR}"
+        echo "  Installed to:     $target_dir/${BUNDLE_NAME}.ofx.bundle"
+    else
+        echo
+        echo "To install for host apps (Flame, Nuke, etc.):"
+        echo "  $0 $PLUGIN_DIR $TARGET_NAME -i"
     fi
-    echo
-    echo "Next steps:"
-    echo "1. Launch your OpenFX host application (Flame, Nuke, etc.)"
-    echo "2. Look for your plugin in the Effects panel"
-    echo "3. Apply to clips and test functionality"
 }
 
 # Main execution
@@ -479,20 +474,20 @@ main() {
     echo "Bundle Name: $BUNDLE_NAME"
     echo "Build Type: $BUILD_TYPE"
     if [[ "$CLEAN_BUILD" == true ]]; then echo "Clean Build: Yes"; fi
-    if [[ "$INSTALL_SYSTEM" == true ]]; then echo "System Install: Yes"; fi
+    if [[ "$DO_INSTALL" == true ]]; then echo "Install to:   ${INSTALL_DIR:-$USER_INSTALL_DIR}"; fi
     echo
-    
+
     check_openfx_root
     check_plugin_exists
     clean_build
     configure_cmake
     build_plugin
-    
+
     plugin_binary=$(find_plugin_binary)
-    bundle_path=$(create_bundle "$plugin_binary")
+    bundle_path=$(locate_or_create_bundle "$plugin_binary")
     install_plugin "$bundle_path"
     verify_installation
-    print_summary
+    print_summary "$bundle_path"
 }
 
 # Run main function
