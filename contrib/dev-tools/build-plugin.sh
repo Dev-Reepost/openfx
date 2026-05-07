@@ -263,16 +263,18 @@ configure_cmake() {
         fi
     fi
 
-    # Additional CMake flags
-    local cmake_flags="-DBUILD_EXAMPLE_PLUGINS=TRUE"
+    # Additional CMake flags. Use an array so values containing spaces stay
+    # in a single argument without needing embedded quotes (which CMake would
+    # otherwise see as part of the value).
+    local cmake_flags=(-DBUILD_EXAMPLE_PLUGINS=TRUE)
     if [[ "$is_comfyui_plugin" == true ]]; then
-        cmake_flags="$cmake_flags -DBUILD_COMFYUI_PLUGINS=ON"
+        cmake_flags+=(-DBUILD_COMFYUI_PLUGINS=ON)
     fi
     if [[ -n "$INSTALL_DIR" ]]; then
-        cmake_flags="$cmake_flags -DPLUGIN_INSTALLDIR=\"$INSTALL_DIR\""
+        cmake_flags+=("-DPLUGIN_INSTALLDIR=$INSTALL_DIR")
     fi
 
-    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" $cmake_flags
+    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" "${cmake_flags[@]}"
     log_success "CMake configuration completed"
 }
 
