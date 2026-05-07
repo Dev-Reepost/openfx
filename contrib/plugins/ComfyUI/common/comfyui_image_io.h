@@ -72,6 +72,9 @@ void writeEXR(const std::string& filename, const ImageData& image);
  * @param rowBytes Bytes per row (may include padding)
  * @param pixelComponents Number of components (3=RGB, 4=RGBA)
  * @param bitDepth Bit depth per component (8, 16, or 32)
+ * @param flipY If true, flip Y axis (OFX bottom-left → EXR top-left).
+ *              Pass false when the host already provides top-left-origin pixels
+ *              (e.g. DaVinci Resolve). Default true matches OFX spec.
  * @return ImageData with float pixels
  */
 ImageData fromOFXBuffer(
@@ -80,7 +83,8 @@ ImageData fromOFXBuffer(
     int height,
     int rowBytes,
     int pixelComponents,
-    int bitDepth
+    int bitDepth,
+    bool flipY = true
 );
 
 /**
@@ -91,14 +95,41 @@ ImageData fromOFXBuffer(
  * @param rowBytes Bytes per row (may include padding)
  * @param pixelComponents Number of components in destination
  * @param bitDepth Bit depth per component (8, 16, or 32)
+ * @param flipY If true, flip Y axis (EXR top-left → OFX bottom-left).
+ *              Pass false when the host expects top-left-origin pixels
+ *              (e.g. DaVinci Resolve). Default true matches OFX spec.
  */
 void toOFXBuffer(
     const ImageData& image,
     void* dstPixels,
     int rowBytes,
     int pixelComponents,
-    int bitDepth
+    int bitDepth,
+    bool flipY = true
 );
+
+/**
+ * @brief Bilinear resize of an ImageData to a new resolution
+ *
+ * @param src Source image
+ * @param targetWidth Target width in pixels
+ * @param targetHeight Target height in pixels
+ * @return New ImageData at the requested resolution
+ */
+ImageData resize(const ImageData& src, int targetWidth, int targetHeight);
+
+/**
+ * @brief Compute target dimensions to resize an image so its shorter side equals targetShortSide,
+ *        preserving aspect ratio.
+ *
+ * @param srcWidth  Source width
+ * @param srcHeight Source height
+ * @param targetShortSide Desired length of the shorter side in pixels
+ * @param outWidth  [out] Computed target width (rounded to nearest even number)
+ * @param outHeight [out] Computed target height (rounded to nearest even number)
+ */
+void computeResizeDims(int srcWidth, int srcHeight, int targetShortSide,
+                        int& outWidth, int& outHeight);
 
 } // namespace ImageIO
 } // namespace ComfyUI

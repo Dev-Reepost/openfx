@@ -94,6 +94,7 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     , _outputVersion(nullptr)
     , _enableCache(nullptr)
     , _timeout(nullptr)
+    , _collectAndSubmit(nullptr)
     , _instanceName("")
 {
     // Initialize logger first
@@ -407,13 +408,29 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
             } catch (...) { _logger->warn("Source Continuous Samples: NOT AVAILABLE"); }
         }
 
+        // Host description (used to decide Y-flip for EXR I/O — see shouldFlipYForOFX)
+        try {
+            OFX::ImageEffectHostDescription* hd = OFX::getImageEffectHostDescription();
+            if (hd) {
+                const char* originStr = "BottomLeft";
+                if (hd->nativeOrigin == OFX::eNativeOriginTopLeft) originStr = "TopLeft";
+                else if (hd->nativeOrigin == OFX::eNativeOriginCenter) originStr = "Center";
+                _logger->info("Host Name: '{}' | Label: '{}' | nativeOrigin: {} | flipYForEXR: {}",
+                              hd->hostName, hd->hostLabel, originStr,
+                              shouldFlipYForOFX() ? "YES" : "NO");
+            } else {
+                _logger->warn("Host description not available");
+            }
+        } catch (...) { _logger->warn("Host description: NOT AVAILABLE"); }
+
         _logger->info("=======================================================");
         _logger->info("=== END COMPREHENSIVE OFX ENVIRONMENT DISCOVERY ===");
         _logger->info("=======================================================");
     }
 
     // Fetch common parameters
-    _enableProcessing = fetchBooleanParam("enableProcessing");
+    // Sequence plugins don't define this param — _enableProcessing stays nullptr
+    try { _enableProcessing = fetchBooleanParam("enableProcessing"); } catch (...) {}
     _serverAddress = fetchStringParam("serverAddress");
     _serverPort = fetchIntParam("serverPort");
     _macMountPath = fetchStringParam("macMountPath");
@@ -431,6 +448,10 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     _refreshTrigger = fetchDoubleParam("refreshTrigger");
     _jobStatus = fetchStringParam("jobStatus");
     _jobStatusColor = fetchRGBParam("jobStatusColor");
+    try { _flipYMode = fetchChoiceParam("flipYMode"); } catch (...) { _flipYMode = nullptr; }
+
+    // Sequence plugins expose a "Collect & Submit" button; non-sequence plugins don't.
+    try { _collectAndSubmit = fetchPushButtonParam("collectAndSubmit"); } catch (...) {}
 
     if (_logger) {
         _logger->info("Parameter fetch results:");
@@ -523,7 +544,8 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
     // Invalidate RoD cache when parameters affecting output path change
     // This ensures canvas resizes correctly when switching between instances
     if (paramName == "projectName" || paramName == "workflowName" ||
-        paramName == "outputVersion" || paramName == "workflowFilePath") {
+        paramName == "outputVersion" || paramName == "workflowFilePath" ||
+        paramName == "macMountPath"  || paramName == "winMountPath") {
         std::lock_guard<std::mutex> lock(_cacheMutex);
         if (!_cacheDimensions.empty() || !_cacheFileExists.empty()) {
             if (_logger) {
@@ -533,6 +555,98 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
             _cacheDimensions.clear();
             _cacheFileExists.clear();
         }
+
+    }
+
+    // For sequence plugins: cancel the pending job on any non-system parameter change.
+    // Unlike per-frame plugins (where each frame is independent), sequence plugins submit
+    // one job for all frames — any inference param change (imageLoadCap, windowSize,
+    // textPrompt, guidanceScale, etc.) invalidates the current job's output.
+    // System params that update independently of user intent are excluded.
+    static const std::unordered_set<std::string> kSystemParams = {
+        "jobStatus", "jobStatusColor", "refreshTrigger", "asyncMode", "placeholderMode"
+    };
+    if (isSequencePlugin() && kSystemParams.find(paramName) == kSystemParams.end()) {
+        if (!_pendingSequenceOutputPrefix.empty()) {
+            if (_logger) _logger->info("Parameter '{}' changed - cancelling pending sequence job (startFrame={})", paramName, _sequenceStartFrame);
+            if (_jobManager) _jobManager->cancelJob(_sequenceStartFrame);
+            _pendingSequenceOutputPrefix.clear();
+        }
+    }
+
+    // "Collect & Submit" button: stash the request and bump _refreshTrigger so the
+    // host's next render() call performs the per-frame fetchImage loop on the render
+    // thread.  Calling fetchImage() directly here deadlocks DaVinci Resolve / Fusion
+    // (the host's clipGetImage routes through Fusion::Input::GetSourceTagList which
+    // waits on the same UI thread we're currently on).  Deferring to render() costs
+    // nothing on hosts that allowed the in-place call (Flame, Nuke), and unblocks
+    // Resolve/Fusion.  See executePendingCollect() for the actual work.
+    if (paramName == "collectAndSubmit" && isSequencePlugin()) {
+        if (_logger) {
+            _logger->info("=== Collect & Submit requested ===");
+            _logger->flush();
+        }
+
+        try {
+            std::string project, mountPath;
+            _projectName->getValue(project);
+            _macMountPath->getValue(mountPath);
+
+            if (project.empty()) {
+                if (_logger) { _logger->warn("  ABORT: project name is empty"); _logger->flush(); }
+                return;
+            }
+            if (mountPath.empty()) {
+                if (_logger) { _logger->warn("  ABORT: Mac mount path is empty — set it in the Server tab"); _logger->flush(); }
+                return;
+            }
+
+            // Resolve frame range here (cheap; doesn't fetch any pixel data).
+            OfxRangeD clipRange = _srcClip->getFrameRange();
+            int startFrame = static_cast<int>(std::round(clipRange.min));
+            int cap        = getImageLoadCap();
+            int endFrame   = (cap > 0)
+                             ? std::min(static_cast<int>(std::round(clipRange.max)), startFrame + cap - 1)
+                             : static_cast<int>(std::round(clipRange.max));
+
+            if (_logger) {
+                _logger->info("  Frame range: [{}, {}] ({} frames, cap={})",
+                              startFrame, endFrame, endFrame - startFrame + 1, cap);
+            }
+
+            // Stash request — will be drained by the next render() call.
+            {
+                std::lock_guard<std::mutex> lock(_pendingCollectMutex);
+                _pendingCollect.active     = true;
+                _pendingCollect.startFrame = startFrame;
+                _pendingCollect.endFrame   = endFrame;
+            }
+
+            // Show interim status so the user has visible feedback before the host renders.
+            try { if (_jobStatus)      _jobStatus->setValue("Collect & Submit queued — rendering will start collection"); } catch (...) {}
+            try { if (_jobStatusColor) _jobStatusColor->setValue(0.0, 0.7, 1.0); } catch (...) {}
+
+            // Bump _refreshTrigger so the host invalidates its render cache and re-renders
+            // the current frame.  That render call will execute the deferred collect.
+            if (_refreshTrigger) {
+                double cur = 0.0;
+                try { _refreshTrigger->getValue(cur); } catch (...) {}
+                try { _refreshTrigger->setValue(cur + 1.0); } catch (...) {}
+            }
+
+            if (_logger) { _logger->info("  Request stashed; refreshTrigger bumped — waiting for render()"); _logger->flush(); }
+        } catch (const std::exception& e) {
+            if (_logger) {
+                _logger->error("  EXCEPTION in Collect & Submit (queue phase): {}", e.what());
+                _logger->flush();
+            }
+        } catch (...) {
+            if (_logger) {
+                _logger->error("  UNKNOWN EXCEPTION in Collect & Submit (queue phase)");
+                _logger->flush();
+            }
+        }
+        return;
     }
 
     // Recreate ComfyUI client if server parameters change
@@ -549,6 +663,218 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
         _comfyClient.reset(new Client(serverUrl));
 
         if (_logger) _logger->info("ComfyUI client recreated successfully");
+    }
+}
+
+void BasePlugin::executePendingCollect()
+{
+    // Atomically claim the pending request so concurrent renders don't double-submit.
+    int startFrame = 0, endFrame = 0;
+    {
+        std::lock_guard<std::mutex> lock(_pendingCollectMutex);
+        if (!_pendingCollect.active) return;
+        startFrame = _pendingCollect.startFrame;
+        endFrame   = _pendingCollect.endFrame;
+        _pendingCollect.active = false;
+    }
+
+    if (_logger) {
+        _logger->info("=== Collect & Submit (deferred) executing on render thread ===");
+        _logger->flush();
+    }
+
+    try {
+        // Lazy-init client + job manager (mirrors the prior changedParam path).
+        if (!_comfyClient) {
+            std::string address; _serverAddress->getValue(address);
+            int port = _serverPort->getValue();
+            if (_logger) _logger->info("  Creating ComfyUI client: {}:{}", address, port);
+            _comfyClient.reset(new Client(address + ":" + std::to_string(port)));
+        }
+        if (!_jobManager) {
+            _jobManager.reset(new AsyncJobManager(_comfyClient.get(), _logger));
+            _jobManager->setCompletionCallback([this](int f, bool ok){ onJobComplete(f, ok); });
+            _jobManager->setStatusUpdateCallback([this](){ updateJobStatusDisplay(); });
+            _jobManager->setAdaptivePollingIntervals(0.5, 5.0);
+            _jobManager->setMaxPollAttempts(300);
+            _jobManager->setJobRetentionTime(300);
+        }
+
+        std::string mountPath, project, workflowName, version, serverAddress;
+        int serverPort = 0;
+        _macMountPath->getValue(mountPath);
+        _projectName->getValue(project);
+        _workflowName->getValue(workflowName);
+        _outputVersion->getValue(version);
+        _serverAddress->getValue(serverAddress);
+        serverPort = _serverPort->getValue();
+
+        if (_logger) {
+            _logger->info("  Server:      {}:{}", serverAddress, serverPort);
+            _logger->info("  Mount path:  '{}'", mountPath);
+            _logger->info("  Project:     '{}'", project);
+            _logger->info("  Workflow:    '{}'", workflowName);
+            _logger->info("  Version:     '{}'", version);
+            _logger->flush();
+        }
+
+        // Re-validate (params may have changed between queue and render).
+        if (project.empty()) {
+            if (_logger) { _logger->warn("  ABORT: project name is empty"); _logger->flush(); }
+            return;
+        }
+        if (mountPath.empty()) {
+            if (_logger) { _logger->warn("  ABORT: Mac mount path is empty"); _logger->flush(); }
+            return;
+        }
+
+        std::string outputDir   = mountPath + "/out/" + project + "/" + workflowName + "/" + version;
+        std::string inputFolder = constructInputFolderPath();
+        std::string base        = getEffectiveBasename();
+
+        if (_logger) {
+            _logger->info("  Frame range: [{}, {}] ({} frames)", startFrame, endFrame, endFrame - startFrame + 1);
+            _logger->info("  Input folder: '{}'", inputFolder);
+            _logger->info("  Output dir:   '{}'", outputDir);
+            _logger->info("  Basename:     '{}'", base);
+            _logger->flush();
+        }
+
+        ImageIO::createDirectoryRecursive(outputDir);
+        ImageIO::createDirectoryRecursive(inputFolder);
+
+        std::map<int, ImageData> frameData;
+        int nTotal = endFrame - startFrame + 1;
+        int cached = 0, fetched = 0, failed = 0;
+        if (_logger) _logger->info("  Starting frame collection ({} frames)...", nTotal);
+
+        auto setStatus = [&](const std::string& text, double sr, double sg, double sb) {
+            try { if (_jobStatus)      _jobStatus->setValue(text); }      catch (...) {}
+            try { if (_jobStatusColor) _jobStatusColor->setValue(sr, sg, sb); } catch (...) {}
+        };
+        setStatus("Collecting: 0 / " + std::to_string(nTotal), 0.0, 0.7, 1.0);
+
+        for (int t = startFrame; t <= endFrame; ++t) {
+            std::ostringstream ss;
+            ss << inputFolder << "/" << base << "."
+               << std::setfill('0') << std::setw(4) << t << ".exr";
+            if (std::filesystem::exists(ss.str())) {
+                ++cached;
+                setStatus("Collecting: " + std::to_string(fetched + cached) + " / " + std::to_string(nTotal) + " (cached)",
+                          0.0, 0.7, 1.0);
+                continue;
+            }
+            if (_logger && (t == startFrame || t % 10 == 0)) {
+                _logger->info("  Fetching frame {} / {}...", t, endFrame);
+                _logger->flush();
+            }
+            setStatus("Collecting: " + std::to_string(fetched + cached) + " / " + std::to_string(nTotal),
+                      0.0, 0.7, 1.0);
+            std::unique_ptr<OFX::Image> img(_srcClip->fetchImage(static_cast<double>(t)));
+            if (!img) {
+                if (_logger) _logger->warn("  fetchImage({}) returned null — skipping", t);
+                ++failed;
+                continue;
+            }
+            OfxRectI bounds = img->getBounds();
+            int w = bounds.x2 - bounds.x1, h = bounds.y2 - bounds.y1;
+            int rb = img->getRowBytes(), nc = img->getPixelComponentCount();
+            int bd = 32;
+            OFX::BitDepthEnum bde = img->getPixelDepth();
+            if (bde == OFX::eBitDepthUByte)  bd = 8;
+            else if (bde == OFX::eBitDepthUShort) bd = 16;
+            frameData[t] = ImageIO::fromOFXBuffer(img->getPixelData(), w, h, rb, nc, bd, shouldFlipYForOFX());
+            img.reset();
+            ++fetched;
+        }
+
+        if (_logger) {
+            _logger->info("  Collection done: {} fetched, {} cached on disk, {} failed",
+                          fetched, cached, failed);
+            _logger->flush();
+        }
+        setStatus("Writing " + std::to_string(nTotal) + " frames to disk...", 1.0, 0.55, 0.0);
+
+        if (frameData.empty() && cached == 0) {
+            if (_logger) { _logger->warn("  ABORT: no frames collected and none cached"); _logger->flush(); }
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(_pendingFramesMutex);
+            _pendingFrames.clear();
+            _pendingCollectionKey.clear();
+        }
+
+        std::string outputPrefix = mountPath + "/out/" + project + "/" + workflowName + "/" + version + "/" + base;
+        std::map<std::string, std::string> inputPaths = {{"InputA", inputFolder}};
+        std::string firstOutputPath = constructExpectedOutputPath(startFrame);
+
+        if (_logger) {
+            _logger->info("  Output prefix:     '{}'", outputPrefix);
+            _logger->info("  First output path: '{}'", firstOutputPath);
+            _logger->flush();
+        }
+
+        // Output cache check — same logic as before.
+        {
+            int nFrames = endFrame - startFrame + 1;
+            int existingCount = 0;
+            for (int t = startFrame; t <= endFrame; ++t) {
+                std::ostringstream ss;
+                ss << outputDir << "/" << base << "."
+                   << std::setfill('0') << std::setw(4) << t << ".exr";
+                if (std::filesystem::exists(ss.str())) ++existingCount;
+            }
+
+            if (existingCount == nFrames) {
+                if (_logger) {
+                    _logger->info("  All {} output frame(s) cached on disk — skipping submission", nFrames);
+                    _logger->flush();
+                }
+                return;
+            }
+
+            if (existingCount > 0) {
+                int deleted = 0;
+                for (int t = startFrame; t <= endFrame; ++t) {
+                    std::ostringstream ss;
+                    ss << outputDir << "/" << base << "."
+                       << std::setfill('0') << std::setw(4) << t << ".exr";
+                    try {
+                        if (std::filesystem::remove(ss.str())) ++deleted;
+                    } catch (const std::exception& e) {
+                        if (_logger) _logger->warn("  Could not delete '{}': {}", ss.str(), e.what());
+                    }
+                }
+                if (_logger) {
+                    _logger->info("  Removed {} stale output EXR(s) before re-submission", deleted);
+                    _logger->flush();
+                }
+            }
+        }
+
+        _sequenceStartFrame = startFrame;
+        _sequenceEndFrame   = endFrame;
+        _jobManager->submitSequenceJobAsync(startFrame, std::move(frameData),
+                                            inputFolder, base,
+                                            inputPaths, firstOutputPath, this);
+        _pendingSequenceOutputPrefix = outputPrefix;
+
+        if (_logger) {
+            _logger->info("  Job submitted (startFrame={}, endFrame={})", startFrame, endFrame);
+            _logger->flush();
+        }
+    } catch (const std::exception& e) {
+        if (_logger) {
+            _logger->error("  EXCEPTION in deferred Collect & Submit: {}", e.what());
+            _logger->flush();
+        }
+    } catch (...) {
+        if (_logger) {
+            _logger->error("  UNKNOWN EXCEPTION in deferred Collect & Submit");
+            _logger->flush();
+        }
     }
 }
 
@@ -620,8 +946,17 @@ void BasePlugin::render(const OFX::RenderArguments &args)
                      args.renderScale.x, args.renderScale.y);
     }
 
-    // Check if processing is enabled - if not, just passthrough
-    bool processingEnabled = _enableProcessing->getValue();
+    // Drain any deferred Collect & Submit before running the per-frame render path.
+    // No-op unless changedParam(collectAndSubmit) stashed a request.  Sequence plugins only.
+    // We're on the render thread now, so fetchImage() at arbitrary times is legal on every host.
+    if (isSequencePlugin()) {
+        executePendingCollect();
+    }
+
+    // Check if processing is enabled - if not, just passthrough.
+    // Sequence plugins don't have the enable param at all (_enableProcessing == nullptr):
+    // their submit action is the "Collect & Submit" button, not this toggle.
+    bool processingEnabled = !_enableProcessing || _enableProcessing->getValue();
     if (!processingEnabled) {
         if (_logger) _logger->info("ComfyUI processing DISABLED - passthrough mode");
 
@@ -901,7 +1236,7 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
             throw std::runtime_error("Failed to allocate destination image buffer for cached result");
         }
 
-        ImageIO::toOFXBuffer(outputImageData, dstPixelData, dst->getRowBytes(), dstPixelComponents, dstBitDepthInt);
+        ImageIO::toOFXBuffer(outputImageData, dstPixelData, dst->getRowBytes(), dstPixelComponents, dstBitDepthInt, shouldFlipYForOFX());
         if (_logger) _logger->info("Cached result loaded successfully");
 
         progressUpdate(1.0);
@@ -1128,7 +1463,7 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
 
     if (_logger) _logger->info("Copying image data to OFX buffer (pointer: {})", dstPixelData);
     ImageIO::toOFXBuffer(resultImage, dstPixelData,
-                        dstRowBytes, dstPixelComponents, dstBitDepthInt);
+                        dstRowBytes, dstPixelComponents, dstBitDepthInt, shouldFlipYForOFX());
 
     if (_logger) _logger->info("Image data copied successfully");
     progressUpdate(1.0);
@@ -1287,7 +1622,8 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::s
         height,
         rowBytes,
         pixelComponents,
-        bitDepthInt
+        bitDepthInt,
+        shouldFlipYForOFX()
     );
 
     // Log first pixel after safe conversion
@@ -1576,6 +1912,84 @@ std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
               << std::setfill('0') << std::setw(4) << frame << ".exr";
 
     return inputPath.str();
+}
+
+std::string BasePlugin::constructInputFolderPath() const
+{
+    // Returns the folder that holds the full EXR sequence for sequence-mode plugins.
+    // Pattern: {macMountPath}/in/projects/{project}/{workflow}/{version}/{basename}/
+    std::string mountPath, project, workflow, version;
+    _macMountPath->getValue(mountPath);
+    _projectName->getValue(project);
+    _workflowName->getValue(workflow);
+    _outputVersion->getValue(version);
+    std::string basename = const_cast<BasePlugin*>(this)->getEffectiveBasename();
+
+    std::ostringstream folder;
+    folder << mountPath << "/in/projects/"
+           << project   << "/"
+           << workflow  << "/"
+           << version   << "/"
+           << basename;
+    return folder.str();
+}
+
+std::string BasePlugin::writeInputSequence(int startFrame, int endFrame)
+{
+    // Write every frame in [startFrame, endFrame] from _srcClip into a dedicated folder.
+    // Each frame is fetched, converted, written, and immediately released to keep peak
+    // memory at one frame (OFX images can be large).
+    //
+    // IMPORTANT: getImage() / fetchImage() must be called on the render thread.
+    // This function must never be called from a background thread.
+
+    std::string folder = constructInputFolderPath();
+    if (!ImageIO::createDirectoryRecursive(folder)) {
+        throw std::runtime_error("writeInputSequence: failed to create input folder: " + folder);
+    }
+
+    std::string base = getEffectiveBasename();
+    int written = 0;
+
+    if (_logger) {
+        _logger->info("writeInputSequence: writing frames {}-{} to {}", startFrame, endFrame, folder);
+    }
+
+    for (int t = startFrame; t <= endFrame; ++t) {
+        // fetchImage respects temporal clip access; may return nullptr for out-of-range frames
+        std::unique_ptr<OFX::Image> img(_srcClip->fetchImage(static_cast<double>(t)));
+        if (!img.get()) {
+            if (_logger) _logger->warn("writeInputSequence: fetchImage({}) returned null, skipping", t);
+            continue;
+        }
+
+        OfxRectI bounds = img->getBounds();
+        int width      = bounds.x2 - bounds.x1;
+        int height     = bounds.y2 - bounds.y1;
+        int rowBytes   = img->getRowBytes();
+        int nComp      = img->getPixelComponentCount();
+        int bitDepthInt = 32;
+        OFX::BitDepthEnum bd = img->getPixelDepth();
+        if (bd == OFX::eBitDepthUByte)  bitDepthInt = 8;
+        else if (bd == OFX::eBitDepthUShort) bitDepthInt = 16;
+
+        ImageData imgData = ImageIO::fromOFXBuffer(
+            img->getPixelData(), width, height, rowBytes, nComp, bitDepthInt, shouldFlipYForOFX());
+        img.reset();  // release OFX buffer immediately — do not hold while writing
+
+        std::ostringstream path;
+        path << folder << "/" << base << "."
+             << std::setfill('0') << std::setw(4) << t << ".exr";
+
+        ImageIO::writeEXR(path.str(), imgData);
+        written++;
+    }
+
+    if (_logger) {
+        _logger->info("writeInputSequence: wrote {} frame(s) to {}", written, folder);
+    }
+
+    return folder;
 }
 
 std::map<std::string, std::string> BasePlugin::writeInputImages(int frame)
@@ -1982,8 +2396,11 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
 
     // Replace "${FRAME}" with number (no quotes)
     // Search for the placeholder INCLUDING surrounding quotes to convert string to number
+    // For sequence plugins: use _sequenceStartFrame so SaveEXR.start_frame matches the
+    // actual OFX frame numbers (e.g. 1001 not 0).  For frame-based plugins: use frame.
     placeholder = "\"${FRAME}\"";
-    std::string frameStr = std::to_string(frame);
+    int frameForWorkflow = isSequencePlugin() ? _sequenceStartFrame : frame;
+    std::string frameStr = std::to_string(frameForWorkflow);
     if (_logger) _logger->info("Replacing \"${{FRAME}}\" with numeric: {}", frameStr);
     replaceCount = 0;
     while ((pos = workflowStr.find(placeholder)) != std::string::npos) {
@@ -2279,22 +2696,64 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
         }
     }
 
-    // Lazy initialize job manager (after _comfyClient exists)
+    // Ensure ComfyUI client and job manager exist before any job-submission path.
+    // This must happen here (not lazily inside STEP 3) so that the sequence plugin
+    // guard below can see a valid _jobManager on the very first render call.
+    if (!_comfyClient) {
+        if (_logger) _logger->info("Frame {}: Creating ComfyUI client (early init)", frame);
+        std::string address;
+        _serverAddress->getValue(address);
+        int port = _serverPort->getValue();
+        std::string serverUrl = address + ":" + std::to_string(port);
+        _comfyClient.reset(new Client(serverUrl));
+    }
     if (!_jobManager && _comfyClient) {
-        if (_logger) _logger->info("Initializing AsyncJobManager");
+        if (_logger) _logger->info("Frame {}: Initializing AsyncJobManager (early init)", frame);
         _jobManager.reset(new AsyncJobManager(_comfyClient.get(), _logger));
-
-        // Set completion callback
         _jobManager->setCompletionCallback([this](int completedFrame, bool success) {
             this->onJobComplete(completedFrame, success);
         });
-
-        // Set status update callback (for periodic job status refresh)
         _jobManager->setStatusUpdateCallback([this]() {
             this->updateJobStatusDisplay();
         });
-
         if (_logger) _logger->info("AsyncJobManager initialized successfully");
+    }
+
+    // STEP 2 (sequence plugins only): manage the single sequence-wide job
+    if (isSequencePlugin() && _jobManager) {
+
+        // 2a. Active job guard — build the output prefix key for this configuration
+        std::string mountPath, project, workflowName, version;
+        _macMountPath->getValue(mountPath);
+        _projectName->getValue(project);
+        _workflowName->getValue(workflowName);
+        _outputVersion->getValue(version);
+        std::string outputPrefix = mountPath + "/out/" + project + "/" + workflowName + "/" + version + "/" + getEffectiveBasename();
+
+        if (_pendingSequenceOutputPrefix == outputPrefix) {
+            // A job was previously submitted for this exact output path.
+            // Check whether it is still active.
+            JobStatus seqStatus = _jobManager->getJobStatus(_sequenceStartFrame);
+            bool active = (seqStatus == JobStatus::QUEUED     ||
+                           seqStatus == JobStatus::PROCESSING);
+            if (active) {
+                if (_logger) _logger->info("Frame {}: Sequence job active (startFrame={}) — returning placeholder", frame, _sequenceStartFrame);
+                returnPlaceholder(args, frame);
+                return;
+            }
+            // Job ended (completed successfully or failed) but output file missing for
+            // this frame → either failure or file-not-yet-flushed.  Clear pending and
+            // fall through to re-submit.
+            if (_logger) _logger->info("Frame {}: Sequence job ended without output — clearing pending, will resubmit", frame);
+            _pendingSequenceOutputPrefix.clear();
+        }
+
+        // 2b. No active job for this output prefix.
+        // Sequence plugins require the user to press "Collect & Submit" to start processing.
+        // The render thread only shows a placeholder — it never calls fetchImage() here.
+        if (_logger) _logger->info("Frame {}: No sequence job active — waiting for Collect & Submit", frame);
+        returnPlaceholder(args, frame);
+        return;
     }
 
     // STEP 2: Check if job already pending
@@ -2409,7 +2868,8 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
             else if (bitDepth == OFX::eBitDepthUShort) bitDepthInt = 16;
 
             return ImageIO::fromOFXBuffer(
-                img->getPixelData(), width, height, rowBytes, pixelComponents, bitDepthInt
+                img->getPixelData(), width, height, rowBytes, pixelComponents, bitDepthInt,
+                shouldFlipYForOFX()
             );
         };
 
@@ -2716,6 +3176,11 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
                       isFullFrameRender);
     }
 
+    if (isFullFrameRender && _logger) {
+        _logger->info("Frame {}: loadCachedResult branch = FULL-FRAME ({}x{})",
+                      frame, outputImageData.width, outputImageData.height);
+    }
+
     // Handle resolution mismatch (e.g., when workflow includes resize)
     ImageData regionData = outputImageData;
 
@@ -2728,23 +3193,33 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
                            renderWindow.x2 <= outputImageData.width &&
                            renderWindow.y2 <= outputImageData.height);
 
+        if (_logger) {
+            _logger->info("Frame {}: loadCachedResult branch = {} | output={}x{} render=({},{})-({},{}) ({}x{})",
+                          frame, isSubRegion ? "SUB-REGION" : "RESOLUTION-MISMATCH",
+                          outputImageData.width, outputImageData.height,
+                          renderWindow.x1, renderWindow.y1, renderWindow.x2, renderWindow.y2,
+                          renderWidth, renderHeight);
+        }
+
         if (isSubRegion) {
-            // Extract the render window region from the full cached image
+            // Extract the render window region from the full cached image.
+            // regionData is built in top-left (EXR) layout — the final
+            // toOFXBuffer(..., shouldFlipYForOFX()) call below is the single
+            // place that handles host-specific OFX buffer orientation. Doing a
+            // Y-flip here too would double-flip on hosts where the flag is true.
+            // The renderWindow is in OFX (bottom-up) coords; we map it to image
+            // (top-down) row range and iterate ascending so the result is top-left.
             regionData.width = renderWidth;
             regionData.height = renderHeight;
 
             std::vector<float> extractedPixels;
             extractedPixels.reserve(renderWidth * renderHeight * outputImageData.channels);
 
-            // IMPORTANT: Convert OFX coordinates (bottom-up) to EXR coordinates (top-down)
-            // renderWindow uses OFX coordinates where Y increases upward from bottom
-            // but outputImageData uses EXR format where Y increases downward from top
-            for (int y = renderWindow.y1; y < renderWindow.y2; ++y) {
-                // Convert OFX Y to EXR Y: flip coordinate system
-                int exrY = outputImageData.height - 1 - y;
-
+            int firstImageRow = outputImageData.height - renderWindow.y2;
+            int lastImageRow  = outputImageData.height - renderWindow.y1;  // exclusive
+            for (int imgRow = firstImageRow; imgRow < lastImageRow; ++imgRow) {
                 for (int x = renderWindow.x1; x < renderWindow.x2; ++x) {
-                    int srcIdx = (exrY * outputImageData.width + x) * outputImageData.channels;
+                    int srcIdx = (imgRow * outputImageData.width + x) * outputImageData.channels;
                     for (int c = 0; c < outputImageData.channels; ++c) {
                         extractedPixels.push_back(outputImageData.pixels[srcIdx + c]);
                     }
@@ -2769,9 +3244,10 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
                              renderWidth, renderHeight);
             }
 
-            // Strategy: Crop or pad to fit the render window
-            // CRITICAL: Must flip Y-axis because OFX uses bottom-up coordinates (Y=0 at bottom)
-            // while EXR uses top-down coordinates (Y=0 at top)
+            // Strategy: crop or pad to fit the render window in top-left (EXR) layout.
+            // Y-orientation for the OFX dst buffer is handled exclusively by the
+            // toOFXBuffer(..., shouldFlipYForOFX()) call below — flipping here too
+            // would double-flip on hosts where the flag is true (Resolve, Flame, Nuke).
             regionData.width = renderWidth;
             regionData.height = renderHeight;
 
@@ -2787,20 +3263,15 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
             offsetX = std::max(0, offsetX);
             offsetY = std::max(0, offsetY);
 
-            // Copy pixels from output to the centered position in render window
-            // WITH Y-AXIS FLIP to convert from EXR (top-down) to OFX (bottom-up) coordinates
+            // Copy pixels from output (top-left) to centered position in render window (top-left).
+            // No Y-flip here — toOFXBuffer below applies the host-appropriate flip.
             for (int y = 0; y < copyHeight; ++y) {
                 for (int x = 0; x < copyWidth; ++x) {
-                    // Source: Read from EXR (top-down, Y=0 at top)
                     int srcIdx = (y * outputImageData.width + x) * outputImageData.channels;
-
-                    // Destination: Write to OFX buffer (bottom-up, Y=0 at bottom)
-                    // Flip Y-axis: dst_y = (renderHeight - 1) - (src_y + offsetY)
-                    int dstY = (renderHeight - 1) - (y + offsetY);
+                    int dstY = y + offsetY;
                     int dstX = x + offsetX;
                     int dstIdx = (dstY * renderWidth + dstX) * outputImageData.channels;
 
-                    // Bounds check
                     if (dstIdx >= 0 && dstIdx + outputImageData.channels <= static_cast<int>(resizedPixels.size())) {
                         for (int c = 0; c < outputImageData.channels; ++c) {
                             resizedPixels[dstIdx + c] = outputImageData.pixels[srcIdx + c];
@@ -2812,7 +3283,7 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
             regionData.pixels = std::move(resizedPixels);
 
             if (_logger) {
-                _logger->info("Frame {}: Fitted output ({}x{}) into render window ({}x{}) at offset ({},{}) with Y-axis flip",
+                _logger->info("Frame {}: Fitted output ({}x{}) into render window ({}x{}) at offset ({},{}) — top-left layout, OFX flip deferred to toOFXBuffer",
                              frame, copyWidth, copyHeight, renderWidth, renderHeight, offsetX, offsetY);
             }
         }
@@ -2834,8 +3305,58 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
         throw std::runtime_error(error.str());
     }
 
+    // Diagnostic: sample regionData corners (top-left layout) before OFX write.
+    // Pair this with readEXR's corner log + the post-write OFX corner log below
+    // to triangulate any orientation issue end-to-end.
+    if (_logger) {
+        auto sampleR = [&](int x, int y) {
+            int i = (y * regionData.width + x) * regionData.channels;
+            return std::string("[") +
+                   std::to_string(regionData.pixels[i + 0]) + "," +
+                   std::to_string(regionData.pixels[i + 1]) + "," +
+                   std::to_string(regionData.pixels[i + 2]) + "," +
+                   std::to_string(regionData.channels >= 4 ? regionData.pixels[i + 3] : 1.0f) + "]";
+        };
+        _logger->info("Frame {}: regionData corners (top-left layout, before toOFXBuffer): "
+                      "TL={} TR={} BL={} BR={}",
+                      frame,
+                      sampleR(0, 0),
+                      sampleR(regionData.width - 1, 0),
+                      sampleR(0, regionData.height - 1),
+                      sampleR(regionData.width - 1, regionData.height - 1));
+    }
+
+    bool flipY = shouldFlipYForOFX();
     ImageIO::toOFXBuffer(regionData, dst->getPixelData(), dst->getRowBytes(),
-                         dstPixelComponents, dstBitDepthInt);
+                         dstPixelComponents, dstBitDepthInt, flipY);
+
+    // Diagnostic: sample dst corners (in OFX buffer-memory layout — NOT image coords).
+    // Reading the float buffer directly assumes 32-bit float; only sample for that
+    // case to avoid misinterpreting 8/16-bit pixels.
+    if (_logger && dstBitDepthInt == 32) {
+        const float* dstF = static_cast<const float*>(dst->getPixelData());
+        if (dstF) {
+            int rb = dst->getRowBytes();
+            int floatsPerRow = rb / sizeof(float);  // = renderWidth * dstPixelComponents (typically)
+            auto sampleD = [&](int x, int y) {
+                long base = static_cast<long>(y) * floatsPerRow + static_cast<long>(x) * dstPixelComponents;
+                return std::string("[") +
+                       std::to_string(dstF[base + 0]) + "," +
+                       (dstPixelComponents > 1 ? std::to_string(dstF[base + 1]) : "_") + "," +
+                       (dstPixelComponents > 2 ? std::to_string(dstF[base + 2]) : "_") + "," +
+                       (dstPixelComponents > 3 ? std::to_string(dstF[base + 3]) : "_") + "]";
+            };
+            _logger->info("Frame {}: dst corners (OFX buffer memory order, after toOFXBuffer flipY={}): "
+                          "row0_x0={} row0_xMax={} rowMax_x0={} rowMax_xMax={}",
+                          frame, flipY,
+                          sampleD(0, 0),
+                          sampleD(renderWidth - 1, 0),
+                          sampleD(0, renderHeight - 1),
+                          sampleD(renderWidth - 1, renderHeight - 1));
+            _logger->info("  Reading: row0 = OFX y=0 = {} of displayed image",
+                          flipY ? "BOTTOM (host expects bottom-left)" : "TOP (host expects top-left)");
+        }
+    }
 }
 
 void BasePlugin::onJobComplete(int frame, bool success)
@@ -2854,26 +3375,36 @@ void BasePlugin::onJobComplete(int frame, bool success)
         return;
     }
 
-    // SUCCESS - Add output file to in-memory cache for fast future lookups
-    std::string cachedPath = constructExpectedOutputPath(frame);
+    // SUCCESS - Add output file(s) to in-memory cache for fast future lookups.
+    // For sequence plugins, seed every frame in [_sequenceStartFrame.._sequenceEndFrame]
+    // so subsequent render() calls hit the in-memory cache directly without a filesystem stat.
+    int seedStart = isSequencePlugin() ? _sequenceStartFrame : frame;
+    int seedEnd   = isSequencePlugin() ? _sequenceEndFrame   : frame;
     {
         std::lock_guard<std::mutex> lock(_cacheMutex);
-        _cacheFileExists.insert(cachedPath);
-        if (_logger) {
-            _logger->info("Frame {}: Added to in-memory cache: {}", frame, cachedPath);
+        for (int t = seedStart; t <= seedEnd; ++t) {
+            _cacheFileExists.insert(constructExpectedOutputPath(t));
+        }
+    }
+    if (_logger) {
+        if (isSequencePlugin()) {
+            _logger->info("Sequence job complete: seeded in-memory cache for frames {}-{}", seedStart, seedEnd);
+        } else {
+            _logger->info("Frame {}: Added to in-memory cache: {}", frame, constructExpectedOutputPath(frame));
         }
     }
 
-    // SUCCESS - Invalidate host cache to trigger re-render
-    // Strategy: Modify hidden refresh trigger parameter
+    // SUCCESS - Invalidate host cache to trigger re-render for all affected frames.
+    // For sequence plugins, fire the refresh trigger at every frame so the host
+    // knows to re-render the full sequence (not just startFrame).
     try {
-        double currentValue = 0.0;
-        _refreshTrigger->getValueAtTime(frame, currentValue);
-        _refreshTrigger->setValueAtTime(frame, currentValue + 0.001);
-
+        for (int t = seedStart; t <= seedEnd; ++t) {
+            double currentValue = 0.0;
+            _refreshTrigger->getValueAtTime(t, currentValue);
+            _refreshTrigger->setValueAtTime(t, currentValue + 0.001);
+        }
         if (_logger) {
-            _logger->info("Frame {}: Cache invalidation triggered (refresh: {} -> {})",
-                         frame, currentValue, currentValue + 0.001);
+            _logger->info("Cache invalidation triggered for frames {}-{}", seedStart, seedEnd);
         }
     } catch (const std::exception& e) {
         if (_logger) {
@@ -2888,93 +3419,169 @@ void BasePlugin::onJobComplete(int frame, bool success)
 void BasePlugin::updateJobStatusDisplay()
 {
     if (!_jobManager || !_jobStatus || !_jobStatusColor) {
-        return;  // Silently skip if objects not initialized
+        return;
     }
 
     try {
-        int pendingCount = _jobManager->getPendingJobCount();
-        std::vector<int> pendingFrames = _jobManager->getPendingFrames();
-        std::vector<int> failedFrames = _jobManager->getFailedFrames();
+        auto allJobs  = _jobManager->getAllJobs();
+        auto failedFrames = _jobManager->getFailedFrames();
+        int  pendingCount = _jobManager->getPendingJobCount();
 
         std::string statusText;
-        double r = 0.5, g = 0.5, b = 0.5;  // Default: gray (neutral)
+        double r = 0.5, g = 0.5, b = 0.5;  // gray = idle
 
-        // Determine status and color
-        if (!failedFrames.empty()) {
-            // RED: ComfyUI error detected
-            r = 1.0; g = 0.0; b = 0.0;
-            statusText = "FAILED frames: ";
-            for (size_t i = 0; i < std::min(failedFrames.size(), size_t(5)); ++i) {
-                if (i > 0) statusText += ", ";
-                statusText += std::to_string(failedFrames[i]);
+        // Helper: extract the short human-readable exception message from a ComfyUI
+        // error blob (which is a long JSON string).
+        auto extractError = [](const std::string& raw) -> std::string {
+            const std::string key = "\"exception_message\":\"";
+            auto pos = raw.find(key);
+            if (pos != std::string::npos) {
+                pos += key.size();
+                auto end = raw.find('"', pos);
+                std::string msg = (end != std::string::npos) ? raw.substr(pos, end - pos)
+                                                              : raw.substr(pos, 120);
+                // trim trailing \n
+                while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) msg.pop_back();
+                return msg;
             }
-            if (failedFrames.size() > 5) {
-                statusText += " (+" + std::to_string(failedFrames.size() - 5) + " more)";
-            }
-            if (pendingCount > 0) {
-                statusText += " | ";
-            }
-        }
+            return raw.substr(0, 100);
+        };
 
-        // Then show pending frames
-        if (pendingCount == 0) {
-            if (failedFrames.empty()) {
-                // GREEN: All jobs successful (only if we had jobs)
-                // Check if we've ever had jobs by seeing if there are completed jobs
-                auto allJobs = _jobManager->getAllJobs();
-                bool hasCompletedJobs = false;
-                for (const auto& [frame, job] : allJobs) {
-                    if (job.status == JobStatus::COMPLETED) {
-                        hasCompletedJobs = true;
-                        break;
-                    }
-                }
+        // ---- Build status based on plugin type ----
+        bool foundActive = false;
 
-                if (hasCompletedJobs) {
-                    r = 0.0; g = 0.8; b = 0.0;  // Green for success
-                    statusText = "All jobs completed successfully";
+        if (isSequencePlugin()) {
+            // ================================================================
+            // SEQUENCE PLUGIN — one job, multi-phase (write → submit → poll)
+            // ================================================================
+            for (const auto& [frame, job] : allJobs) {
+                if (job.status == JobStatus::FAILED)    continue;
+                if (job.status == JobStatus::COMPLETED) continue;
+                if (job.status == JobStatus::CANCELLED) continue;
+
+                foundActive = true;
+                int nFrames = (_sequenceEndFrame >= _sequenceStartFrame)
+                              ? (_sequenceEndFrame - _sequenceStartFrame + 1) : 1;
+
+                if (job.submissionStatus == SubmissionStatus::PENDING_WRITE) {
+                    r = 1.0; g = 0.55; b = 0.0;  // orange
+                    statusText = "Writing " + std::to_string(nFrames) + " frame(s) to disk...";
+                } else if (job.submissionStatus == SubmissionStatus::PENDING_SUBMIT) {
+                    r = 1.0; g = 0.75; b = 0.0;  // amber
+                    statusText = "Submitting workflow to ComfyUI...";
                 } else {
-                    r = 0.5; g = 0.5; b = 0.5;  // Gray for no jobs yet
-                    statusText = "No jobs pending";
+                    auto elapsed = static_cast<int>(
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now() - job.submittedTime).count());
+                    r = 1.0; g = 0.9; b = 0.1;  // yellow
+                    statusText = "ComfyUI processing " + std::to_string(nFrames) +
+                                 " frame(s) — " + std::to_string(elapsed) + "s" +
+                                 " (poll " + std::to_string(job.pollCount) + ")";
                 }
-            } else {
-                // Failed jobs exist, but no pending ones
-                statusText += "No jobs pending";
-            }
-        } else {
-            // YELLOW: At least one frame pending
-            if (failedFrames.empty()) {
-                r = 1.0; g = 0.8; b = 0.0;  // Yellow only if no failures
+                break;  // only one sequence job at a time
             }
 
-            if (pendingCount <= 5) {
-                statusText += "Pending: ";
-                for (size_t i = 0; i < pendingFrames.size(); ++i) {
-                    if (i > 0) statusText += ", ";
-                    statusText += std::to_string(pendingFrames[i]);
+            // Idle / done for sequence
+            if (!foundActive && failedFrames.empty()) {
+                int completedCount = 0;
+                for (const auto& [frame, job] : allJobs)
+                    if (job.status == JobStatus::COMPLETED) ++completedCount;
+                if (completedCount > 0) {
+                    r = 0.0; g = 0.8; b = 0.2;  // green
+                    int nFrames = (_sequenceEndFrame >= _sequenceStartFrame)
+                                  ? (_sequenceEndFrame - _sequenceStartFrame + 1)
+                                  : completedCount;
+                    statusText = std::to_string(nFrames) + " frame(s) done";
+                } else {
+                    r = 0.5; g = 0.5; b = 0.5;
+                    statusText = "Ready";
                 }
+            }
+
+        } else {
+            // ================================================================
+            // FRAME-BASED PLUGIN — multiple independent frames in flight
+            // ================================================================
+
+            // Gather active (pending) jobs, sorted by frame number
+            struct ActiveInfo {
+                int frame;
+                int elapsed;   // seconds since submission
+                int pollCount;
+            };
+            std::vector<ActiveInfo> active;
+            int completedCount = 0;
+
+            for (const auto& [frame, job] : allJobs) {
+                if (job.status == JobStatus::FAILED || job.status == JobStatus::CANCELLED) continue;
+                if (job.status == JobStatus::COMPLETED) { ++completedCount; continue; }
+                // QUEUED or PROCESSING
+                auto elapsed = static_cast<int>(
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - job.submittedTime).count());
+                active.push_back({frame, elapsed, job.pollCount});
+            }
+
+            if (!active.empty()) {
+                foundActive = true;
+                r = 1.0; g = 0.9; b = 0.1;  // yellow
+
+                // Show details for up to 3 frames; summarise the rest
+                std::string frameList;
+                int shown = static_cast<int>(std::min(active.size(), size_t(3)));
+                for (int i = 0; i < shown; ++i) {
+                    if (i > 0) frameList += "  |  ";
+                    frameList += "fr." + std::to_string(active[i].frame) +
+                                 " " + std::to_string(active[i].elapsed) + "s" +
+                                 " p" + std::to_string(active[i].pollCount);
+                }
+                int extra = static_cast<int>(active.size()) - shown;
+                if (extra > 0) frameList += "  (+" + std::to_string(extra) + " more)";
+
+                statusText = "Processing: " + frameList;
+
+            } else if (!failedFrames.empty()) {
+                // handled in the shared failure block below
+
+            } else if (completedCount > 0) {
+                r = 0.0; g = 0.8; b = 0.2;  // green
+                statusText = std::to_string(completedCount) + " frame(s) done";
             } else {
-                statusText += std::to_string(pendingCount) + " frames pending";
+                r = 0.5; g = 0.5; b = 0.5;
+                statusText = "Ready";
             }
         }
 
-        // Log only when status actually changes
+        // ---- Failures override everything (both plugin types) ----
+        if (!failedFrames.empty()) {
+            r = 1.0; g = 0.0; b = 0.0;
+            std::string errMsg;
+            for (const auto& [frame, job] : allJobs) {
+                if (job.status == JobStatus::FAILED) {
+                    errMsg = extractError(job.errorMessage);
+                    // Prefix with frame number for frame-based plugins
+                    if (!isSequencePlugin())
+                        errMsg = "fr." + std::to_string(job.frame) + ": " + errMsg;
+                    break;
+                }
+            }
+            statusText = "Failed — " + errMsg;
+            foundActive = false;
+        }
+
+        // Log only when status changes
         static std::string lastStatusText;
         if (_logger && statusText != lastStatusText) {
             _logger->info("Job status: {}", statusText);
             lastStatusText = statusText;
         }
 
-        // Update parameters
-        try {
-            _jobStatus->setValue(statusText);
-        } catch (const std::exception& e) {
+        try { _jobStatus->setValue(statusText); }
+        catch (const std::exception& e) {
             if (_logger) _logger->error("Failed to update job status text: {}", e.what());
         }
-
-        try {
-            _jobStatusColor->setValue(r, g, b);
-        } catch (const std::exception& e) {
+        try { _jobStatusColor->setValue(r, g, b); }
+        catch (const std::exception& e) {
             if (_logger) _logger->error("Failed to update job status color: {}", e.what());
         }
 
@@ -3117,6 +3724,53 @@ int BasePlugin::findLastValidFrame(double currentTime)
     return -1;  // No valid frame found
 }
 
+bool BasePlugin::shouldFlipYForOFX() const
+{
+    // User parameter: 0=Auto, 1=Always flip, 2=Never flip.
+    // Auto: hostname heuristic — known top-left pixel-buffer hosts skip the flip;
+    // everything else flips. We do NOT use kOfxImageEffectHostPropNativeOrigin here:
+    // per the OFX 1.4 spec that property is "only a UI hint" for overlay drawing
+    // and "has no impact on pixel processing" — origins for UI and for pixels are
+    // independent. The hostname table below is empirically calibrated against
+    // actual on-disk EXR orientation.
+    //
+    // Note on Resolve vs Fusion: DaVinci Resolve hosts two distinct OFX endpoints
+    // in the same process — "DaVinciResolve" (Edit/Color page) ships pixels in
+    // OFX-spec bottom-left memory order, while "com.blackmagicdesign.Fusion"
+    // (Fusion page) ships top-left. Treat them separately.
+    int mode = 0;
+    if (_flipYMode) {
+        try { _flipYMode->getValue(mode); } catch (...) { mode = 0; }
+    }
+    if (mode == 1) return true;
+    if (mode == 2) return false;
+
+    bool result = true;
+    const char* reason = "unknown host (default to OFX-spec bottom-left)";
+    OFX::ImageEffectHostDescription* hd = OFX::getImageEffectHostDescription();
+    if (!hd) {
+        result = true;
+        reason = "host description unavailable";
+    } else {
+        const std::string& name = hd->hostName;
+        if      (name.find("Fusion")   != std::string::npos) { result = false; reason = "Fusion (top-left)"; }
+        else if (name.find("Premiere") != std::string::npos) { result = false; reason = "Premiere (top-left)"; }
+        else                                                  { result = true;  reason = name.c_str(); }
+    }
+
+    // Log the decision exactly once per instance so the .log shows what was chosen
+    // without flooding with a per-frame line.
+    if (!_flipDecisionLogged) {
+        _flipDecisionLogged = true;
+        if (_logger) {
+            _logger->info("shouldFlipYForOFX(): decision = {} (reason: {})",
+                          result ? "FLIP (host buffer is bottom-left)" : "NO FLIP (host buffer is top-left)",
+                          reason);
+        }
+    }
+    return result;
+}
+
 // ============================================================================
 // Configuration Management
 // ============================================================================
@@ -3224,7 +3878,8 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
                                           OFX::PageParamDescriptor * /*unused2*/,
                                           OFX::PageParamDescriptor * /*unused3*/,
                                           const json* configDefaults,
-                                          bool skipGroupHeaders)
+                                          bool skipGroupHeaders,
+                                          bool isSequencePlugin)
 {
     // Log config loading status
     auto logger = spdlog::get("comfyui_plugin");
@@ -3310,23 +3965,33 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
 
     // ==== PROCESSING GROUP ====
     OFX::GroupParamDescriptor *processingGroup = desc.defineGroupParam("processingGroup");
-    processingGroup->setLabel("Processing");
+    processingGroup->setLabel("ComfyUI Processing");
     processingGroup->setOpen(true);
     if (!skipGroupHeaders) page->addChild(*processingGroup);
 
-    // Master enable/disable checkbox
-    OFX::BooleanParamDescriptor *enableProcessing = desc.defineBooleanParam("enableProcessing");
-    enableProcessing->setLabel("Enable ComfyUI Processing");
-    enableProcessing->setHint("Enable or disable ComfyUI workflow execution. When disabled, input is passed through unchanged. DISABLE THIS during plugin initialization to prevent blocking UI load!");
-    // Use config default if available, otherwise fallback to hardcoded default
-    bool enableProcessingDefault = false;
-    if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("enableProcessing")) {
-        enableProcessingDefault = (*configDefaults)["controls"]["enableProcessing"].get<bool>();
+    // Sequence plugins: one-shot button — collect all frames then submit the batch.
+    // Frame-based plugins: toggle — enables automatic per-frame submission during render.
+    // Both controls live under the same "ComfyUI Processing" group so their names
+    // don't need to repeat "ComfyUI".
+    if (isSequencePlugin) {
+        OFX::PushButtonParamDescriptor *collectBtn = desc.definePushButtonParam("collectAndSubmit");
+        collectBtn->setLabel("Collect & Process");
+        collectBtn->setHint("Fetch all frames from the timeline and submit the full sequence to ComfyUI for processing.");
+        collectBtn->setParent(*processingGroup);
+        page->addChild(*collectBtn);
+    } else {
+        OFX::BooleanParamDescriptor *enableProcessing = desc.defineBooleanParam("enableProcessing");
+        enableProcessing->setLabel("Enable Processing");
+        enableProcessing->setHint("Enable ComfyUI processing. When ON, each rendered frame is automatically submitted to ComfyUI. When OFF, input passes through unchanged. Keep OFF during initial setup to avoid blocking the UI.");
+        bool enableProcessingDefault = false;
+        if (configDefaults && configDefaults->contains("controls") && (*configDefaults)["controls"].contains("enableProcessing")) {
+            enableProcessingDefault = (*configDefaults)["controls"]["enableProcessing"].get<bool>();
+        }
+        enableProcessing->setDefault(enableProcessingDefault);
+        enableProcessing->setAnimates(false);
+        enableProcessing->setParent(*processingGroup);
+        page->addChild(*enableProcessing);
     }
-    enableProcessing->setDefault(enableProcessingDefault);
-    enableProcessing->setAnimates(false);
-    enableProcessing->setParent(*processingGroup);
-    page->addChild(*enableProcessing);
 
     // Async rendering mode (hidden - always non-blocking)
     OFX::ChoiceParamDescriptor *asyncMode = desc.defineChoiceParam("asyncMode");
@@ -3345,6 +4010,24 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     asyncMode->setIsSecret(true);  // Hidden from UI
     asyncMode->setParent(*processingGroup);
     // page->addChild(*asyncMode);  // Removed from UI
+
+    // EXR Y-flip override — OFX hosts disagree on pixel-buffer orientation.
+    // If your output displays upside-down or input EXRs land flipped on disk,
+    // change this from Auto to the opposite mode. After changing, delete the
+    // cached input EXR folder so the plugin re-writes with the new orientation.
+    OFX::ChoiceParamDescriptor *flipYMode = desc.defineChoiceParam("flipYMode");
+    flipYMode->setLabel("Flip Y for EXR");
+    flipYMode->setHint("Y-axis handling for EXR I/O. Auto: detect by host name "
+                       "(Fusion/Premiere skip flip; Resolve/Flame/Nuke/others flip per OFX spec). "
+                       "Always: force flip. Never: skip flip. "
+                       "Toggle if input EXRs on disk are upside-down or output displays flipped. "
+                       "Delete cached input EXRs after changing.");
+    flipYMode->appendOption("Auto (detect by host)");
+    flipYMode->appendOption("Always Flip");
+    flipYMode->appendOption("Never Flip");
+    flipYMode->setDefault(0);
+    flipYMode->setAnimates(false);
+    flipYMode->setParent(*processingGroup);
 
     // Placeholder display mode (hidden - always checkerboard)
     OFX::ChoiceParamDescriptor *placeholderMode = desc.defineChoiceParam("placeholderMode");
@@ -3367,24 +4050,26 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
 
     // Job status display (read-only)
     OFX::StringParamDescriptor *jobStatus = desc.defineStringParam("jobStatus");
-    jobStatus->setLabel("Job Status");
-    jobStatus->setHint("Current async job queue status");
+    jobStatus->setLabel("Status");
+    jobStatus->setHint("Current processing status — updates automatically as jobs progress.");
     jobStatus->setStringType(OFX::eStringTypeLabel);  // Read-only label
-    jobStatus->setDefault("No jobs pending");
+    jobStatus->setDefault("Ready");
     jobStatus->setEnabled(false);  // Read-only
     jobStatus->setParent(*processingGroup);
     page->addChild(*jobStatus);
 
     // Job status color indicator (visual feedback)
     OFX::RGBParamDescriptor *jobStatusColor = desc.defineRGBParam("jobStatusColor");
-    jobStatusColor->setLabel("Jobs status");
+    jobStatusColor->setLabel("Status Color");
     jobStatusColor->setHint(
-        "Visual status indicator:\n"
-        "• Gray: No jobs yet (neutral)\n"
-        "• Yellow: At least one frame pending\n"
-        "• Red: ComfyUI error detected\n"
-        "• Green: All jobs completed successfully\n\n"
-        "This color updates automatically as jobs progress."
+        "Visual status indicator (updates automatically):\n"
+        "• Cyan:   Collecting frames from timeline\n"
+        "• Orange: Writing input EXRs to disk\n"
+        "• Amber:  Submitting workflow to ComfyUI\n"
+        "• Yellow: ComfyUI processing\n"
+        "• Green:  All frames ready\n"
+        "• Red:    Error / job failed\n"
+        "• Gray:   Idle / no jobs"
     );
     jobStatusColor->setDefault(0.5, 0.5, 0.5);  // Gray by default
     jobStatusColor->setAnimates(false);  // Not animatable (updates programmatically)

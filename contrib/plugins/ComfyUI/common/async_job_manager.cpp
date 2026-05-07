@@ -45,10 +45,21 @@ AsyncJobManager::~AsyncJobManager()
 {
     if (_logger) _logger->info("AsyncJobManager: Shutting down");
 
-    // Signal shutdown
+    // Signal shutdown — the write thread checks this flag between frames
     _shutdown = true;
 
-    // Wait for monitoring thread to finish
+    // Join the write thread FIRST: it holds raw OFX clip pointers that
+    // become invalid as soon as the host tears down the plugin instance.
+    // Joining here ensures fetchImage() is never called on a dead clip.
+    {
+        std::lock_guard<std::mutex> lock(_writeThreadMutex);
+        if (_writeThread.joinable()) {
+            if (_logger) _logger->info("AsyncJobManager: Waiting for write thread to finish");
+            _writeThread.join();
+        }
+    }
+
+    // Then wait for the monitoring thread to finish
     if (_monitorThread.joinable()) {
         if (_logger) _logger->info("AsyncJobManager: Waiting for monitor thread to finish");
         _monitorThread.join();
@@ -258,6 +269,143 @@ void AsyncJobManager::submitJobAsync(int frame,
     if (_logger) {
         _logger->info("  submitJobAsync() returned in {} ms (non-blocking!)", returnDuration.count());
     }
+}
+
+void AsyncJobManager::submitSequenceJobAsync(
+    int startFrame,
+    std::map<int, ImageData> frameData,
+    const std::string& inputFolder,
+    const std::string& basename,
+    const std::map<std::string, std::string>& inputPathMap,
+    const std::string& firstOutputPath,
+    BasePlugin* basePlugin)
+{
+    auto startTime = std::chrono::steady_clock::now();
+
+    if (_logger) {
+        _logger->info("========================================");
+        _logger->info("AsyncJobManager::submitSequenceJobAsync() - startFrame {} ({} frames pre-fetched)",
+                      startFrame, frameData.size());
+        _logger->info("  First output path: {}", firstOutputPath);
+    }
+
+    // Register the job immediately so the sequence guard sees it as active
+    {
+        std::lock_guard<std::mutex> lock(_jobsMutex);
+        AsyncJob job;
+        job.frame = startFrame;
+        job.outputPath = firstOutputPath;
+        job.status = JobStatus::QUEUED;
+        job.submissionStatus = SubmissionStatus::PENDING_WRITE;
+        job.submittedTime = std::chrono::steady_clock::now();
+        _jobs[startFrame] = job;
+        if (_logger) _logger->info("  Frame {} marked as PENDING_WRITE in job queue", startFrame);
+    }
+
+    // Join any previous write thread before starting a new one.
+    {
+        std::lock_guard<std::mutex> lock(_writeThreadMutex);
+        if (_writeThread.joinable()) {
+            _writeThread.join();
+        }
+        // Move frame data into thread (no OFX objects — only plain pixel buffers).
+        // The background thread NEVER calls fetchImage() or touches any OFX clips.
+        _writeThread = std::thread([this, startFrame,
+                     frameData = std::move(frameData),
+                     inputFolder, basename,
+                     inputPathMap, firstOutputPath, basePlugin, startTime]() mutable {
+            try {
+                if (_shutdown.load()) {
+                    if (_logger) _logger->info("  [BG Thread] Shutdown before write — aborting");
+                    return;
+                }
+
+                // ----------------------------------------------------------------
+                // Write pre-fetched frames to the network share as EXR files.
+                // frameData only contains frames NOT already on disk (caller checked).
+                // ----------------------------------------------------------------
+                auto writeStart = std::chrono::steady_clock::now();
+                if (_logger) _logger->info("  [BG Thread] Writing {} input EXR(s)...", frameData.size());
+
+                for (auto& kv : frameData) {
+                    if (_shutdown.load()) {
+                        if (_logger) _logger->info("  [BG Thread] Shutdown during write — aborting");
+                        return;
+                    }
+                    int t = kv.first;
+                    std::ostringstream ss;
+                    ss << inputFolder << "/" << basename << "."
+                       << std::setfill('0') << std::setw(4) << t << ".exr";
+                    ImageIO::writeEXR(ss.str(), kv.second);
+                    kv.second = ImageData{};  // free immediately after write
+                    if (_logger) _logger->debug("  [BG Thread] Frame {}: EXR written", t);
+                }
+                frameData.clear();
+
+                if (_shutdown.load()) {
+                    if (_logger) _logger->info("  [BG Thread] Shutdown after write — aborting submission");
+                    return;
+                }
+
+                auto writeDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - writeStart);
+                if (_logger) _logger->info("  [BG Thread] All EXRs written in {} ms", writeDuration.count());
+
+                // ----------------------------------------------------------------
+                // Build workflow JSON + submit to ComfyUI
+                // ----------------------------------------------------------------
+                {
+                    std::lock_guard<std::mutex> lock(_jobsMutex);
+                    auto it = _jobs.find(startFrame);
+                    if (it != _jobs.end())
+                        it->second.submissionStatus = SubmissionStatus::PENDING_SUBMIT;
+                }
+
+                auto workflowStart = std::chrono::steady_clock::now();
+                json workflow = basePlugin->buildWorkflow(startFrame, inputPathMap);
+                auto workflowDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - workflowStart);
+                if (_logger) _logger->info("  [BG Thread] Workflow built in {} ms", workflowDuration.count());
+
+                auto submitStart = std::chrono::steady_clock::now();
+                std::string promptId = _comfyClient->queuePrompt(workflow, "");
+                auto submitDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - submitStart);
+
+                {
+                    std::lock_guard<std::mutex> lock(_jobsMutex);
+                    auto it = _jobs.find(startFrame);
+                    if (it != _jobs.end()) {
+                        it->second.promptId = promptId;
+                        it->second.submissionStatus = SubmissionStatus::SUBMITTED;
+                    }
+                }
+
+                auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - startTime);
+                if (_logger) {
+                    _logger->info("  [BG Thread] Submitted (promptId: {})", promptId);
+                    _logger->info("  [BG Thread] Total: {} ms (write={}, workflow={}, submit={})",
+                                 totalDuration.count(), writeDuration.count(),
+                                 workflowDuration.count(), submitDuration.count());
+                    _logger->info("========================================");
+                }
+
+            } catch (const std::exception& e) {
+                std::lock_guard<std::mutex> lock(_jobsMutex);
+                auto it = _jobs.find(startFrame);
+                if (it != _jobs.end()) {
+                    it->second.status = JobStatus::FAILED;
+                    it->second.errorMessage = std::string("Sequence submission failed: ") + e.what();
+                }
+                if (_logger) _logger->error("  [BG Thread] Sequence submission failed: {}", e.what());
+            }
+        });
+    }
+
+    auto returnDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startTime);
+    if (_logger) _logger->info("  submitSequenceJobAsync() returned in {} ms", returnDuration.count());
 }
 
 JobStatus AsyncJobManager::getJobStatus(int frame) const

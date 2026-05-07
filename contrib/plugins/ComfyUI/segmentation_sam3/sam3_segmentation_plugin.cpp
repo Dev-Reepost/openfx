@@ -20,6 +20,7 @@ SAM3SegmentationPlugin::SAM3SegmentationPlugin(OfxImageEffectHandle handle)
     , _direction(nullptr)
     , _objId(nullptr)
     , _plotAllMasks(nullptr)
+    , _imageLoadCap(nullptr)
     , _modelPath(nullptr)
     , _offloadModel(nullptr)
 {
@@ -29,12 +30,19 @@ SAM3SegmentationPlugin::SAM3SegmentationPlugin(OfxImageEffectHandle handle)
     _direction      = fetchChoiceParam("direction");
     _objId          = fetchIntParam("objId");
     _plotAllMasks   = fetchBooleanParam("plotAllMasks");
+    _imageLoadCap   = fetchIntParam("imageLoadCap");
     _modelPath      = fetchStringParam("modelPath");
     _offloadModel   = fetchBooleanParam("offloadModel");
 }
 
 SAM3SegmentationPlugin::~SAM3SegmentationPlugin()
 {
+}
+
+int SAM3SegmentationPlugin::getImageLoadCap() const {
+    int cap = 0;
+    if (_imageLoadCap) _imageLoadCap->getValue(cap);
+    return cap;
 }
 
 void SAM3SegmentationPlugin::changedParam(const OFX::InstanceChangedArgs &args,
@@ -128,6 +136,9 @@ json SAM3SegmentationPlugin::buildHardcodedWorkflow(int frame, const std::string
     bool plotAllMasks;
     _plotAllMasks->getValue(plotAllMasks);
 
+    int imageLoadCap;
+    _imageLoadCap->getValue(imageLoadCap);
+
     std::string modelPath;
     _modelPath->getValue(modelPath);
 
@@ -159,6 +170,7 @@ json SAM3SegmentationPlugin::buildHardcodedWorkflow(int frame, const std::string
         _logger->info("  Direction: {}", direction);
         _logger->info("  Obj ID: {}", objId);
         _logger->info("  Plot all masks: {}", plotAllMasks);
+        _logger->info("  Image load cap: {}", imageLoadCap);
         _logger->info("  Model path: {}", modelPath);
         _logger->info("  Offload model: {}", offloadModel);
         _logger->info("  Input (ComfyUI): {}", comfyInputPath);
@@ -173,7 +185,7 @@ json SAM3SegmentationPlugin::buildHardcodedWorkflow(int frame, const std::string
             {"inputs", {
                 {"filepath", comfyInputPath},
                 {"tonemap", "linear"},
-                {"image_load_cap", 0},
+                {"image_load_cap", imageLoadCap},
                 {"skip_first_images", 0},
                 {"select_every_nth", 1}
             }},
@@ -291,6 +303,9 @@ json SAM3SegmentationPlugin::customizeWorkflowWithParams(const json& baseWorkflo
     bool plotAllMasks;
     _plotAllMasks->getValue(plotAllMasks);
 
+    int imageLoadCap;
+    _imageLoadCap->getValue(imageLoadCap);
+
     std::string modelPath;
     _modelPath->getValue(modelPath);
 
@@ -326,6 +341,7 @@ json SAM3SegmentationPlugin::customizeWorkflowWithParams(const json& baseWorkflo
     replaceNumeric("\"${OBJ_ID}\"",          std::to_string(objId));
     replaceNumeric("\"${PLOT_ALL_MASKS}\"",  plotAllMasks ? "true" : "false");
     replaceNumeric("\"${OFFLOAD_MODEL}\"",   offloadModel ? "true" : "false");
+    replaceNumeric("\"${IMAGE_LOAD_CAP}\"",  std::to_string(imageLoadCap));
     // Note: ${FRAME} is handled by the base class customizeWorkflow()
 
     try {
@@ -428,6 +444,17 @@ void SAM3SegmentationPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     objId->setParent(*samGroup);
     page->addChild(*objId);
 
+    // Frame limit (image load cap)
+    OFX::IntParamDescriptor *imageLoadCap = desc.defineIntParam("imageLoadCap");
+    imageLoadCap->setLabel("Frame Limit");
+    imageLoadCap->setHint("Maximum number of frames to load from the input sequence. 0 = no limit.");
+    imageLoadCap->setDefault(50);
+    imageLoadCap->setRange(0, 1024);
+    imageLoadCap->setDisplayRange(0, 200);
+    imageLoadCap->setAnimates(false);
+    imageLoadCap->setParent(*samGroup);
+    page->addChild(*imageLoadCap);
+
     // ==== MODEL GROUP ====
     OFX::GroupParamDescriptor *modelGroup = desc.defineGroupParam("sam3ModelGroup");
     modelGroup->setLabel("Model");
@@ -452,7 +479,8 @@ void SAM3SegmentationPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     page->addChild(*offloadModel);
 
     // Add common parameters (server, project, cache, etc.) with optional config defaults
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults);
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults,
+                                         /*skipGroupHeaders=*/false, /*isSequencePlugin=*/true);
 
     // Override workflowName default for this plugin
     OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
@@ -529,7 +557,7 @@ void SAM3SegmentationPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setSupportsMultipleClipDepths(true);
@@ -543,7 +571,9 @@ void SAM3SegmentationPluginFactory::describeInContext(OFX::ImageEffectDescriptor
     OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
+    // Sequence plugin: render() collects all frames in [start..end] via fetchImage(t),
+    // so the source clip must permit temporal access (effect-level was already true).
+    srcClip->setTemporalClipAccess(true);
     srcClip->setSupportsTiles(false);
     srcClip->setIsMask(false);
 

@@ -56,6 +56,12 @@ MatteMaMaPlugin::MatteMaMaPlugin(OfxImageEffectHandle handle)
 
 MatteMaMaPlugin::~MatteMaMaPlugin() {}
 
+int MatteMaMaPlugin::getImageLoadCap() const {
+    int cap = 0;
+    if (_imageLoadCap) _imageLoadCap->getValue(cap);
+    return cap;
+}
+
 void MatteMaMaPlugin::changedParam(const OFX::InstanceChangedArgs &args,
                                     const std::string &paramName)
 {
@@ -671,7 +677,8 @@ void MatteMaMaPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     page->addChild(*enableVaeSlicing);
 
     // Common parameters
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults);
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults,
+                                         /*skipGroupHeaders=*/false, /*isSequencePlugin=*/true);
 
     OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
     workflow->setDefault("matte_mama");
@@ -750,7 +757,7 @@ void MatteMaMaPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setSupportsMultipleClipDepths(true);
@@ -763,7 +770,9 @@ void MatteMaMaPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
+    // Sequence plugin: render() collects all frames in [start..end] via fetchImage(t),
+    // so the source clip must permit temporal access (effect-level was already true).
+    srcClip->setTemporalClipAccess(true);
     srcClip->setSupportsTiles(false);
     srcClip->setIsMask(false);
 

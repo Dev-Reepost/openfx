@@ -65,6 +65,12 @@ UpscaleSeedVR2Plugin::UpscaleSeedVR2Plugin(OfxImageEffectHandle handle)
 
 UpscaleSeedVR2Plugin::~UpscaleSeedVR2Plugin() {}
 
+int UpscaleSeedVR2Plugin::getImageLoadCap() const {
+    int cap = 0;
+    if (_imageLoadCap) _imageLoadCap->getValue(cap);
+    return cap;
+}
+
 std::string UpscaleSeedVR2Plugin::getColorCorrectionName() const
 {
     int idx = 0;
@@ -367,6 +373,7 @@ json UpscaleSeedVR2Plugin::customizeWorkflowWithParams(const json& baseWorkflow,
     replaceStr("${DIT_MODEL}",    ditModel);
     replaceStr("${DIT_DEVICE}",   ditDevice);
     replaceStr("${OFFLOAD_DIT}",  offloadDiT);
+    replaceStr("${OFFLOAD_UPSCALER}", "cpu");
     replaceStr("${COLOR_CORRECTION}", colorCorrection);
     replaceStr("${ATTENTION_MODE}",   attentionMode);
     // tile_debug is a string "true"/"false" in the workflow
@@ -736,7 +743,8 @@ void UpscaleSeedVR2Plugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     page->addChild(*cacheDiTModel);
 
     // Common parameters (server, project, cache, etc.)
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults);
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults,
+                                         /*skipGroupHeaders=*/false, /*isSequencePlugin=*/true);
 
     // Override workflowName default
     OFX::StringParamDescriptor *workflowName = desc.defineStringParam("workflowName");
@@ -818,7 +826,7 @@ void UpscaleSeedVR2PluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setSupportsMultipleClipDepths(true);
@@ -831,7 +839,9 @@ void UpscaleSeedVR2PluginFactory::describeInContext(OFX::ImageEffectDescriptor &
     OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
+    // Sequence plugin: render() collects all frames in [start..end] via fetchImage(t),
+    // so the source clip must permit temporal access (effect-level was already true).
+    srcClip->setTemporalClipAccess(true);
     srcClip->setSupportsTiles(false);
     srcClip->setIsMask(false);
 

@@ -44,6 +44,12 @@ MatteMA2Plugin::MatteMA2Plugin(OfxImageEffectHandle handle)
 
 MatteMA2Plugin::~MatteMA2Plugin() {}
 
+int MatteMA2Plugin::getImageLoadCap() const {
+    int cap = 0;
+    if (_imageLoadCap) _imageLoadCap->getValue(cap);
+    return cap;
+}
+
 void MatteMA2Plugin::changedParam(const OFX::InstanceChangedArgs &args,
                                    const std::string &paramName)
 {
@@ -566,7 +572,8 @@ void MatteMA2Plugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     offloadSam3Model->setParent(*modelGroup);
     page->addChild(*offloadSam3Model);
 
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults);
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults,
+                                         /*skipGroupHeaders=*/false, /*isSequencePlugin=*/true);
 
     OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
     workflow->setDefault("matte_ma2");
@@ -646,7 +653,7 @@ void MatteMA2PluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setSupportsMultipleClipDepths(true);
@@ -659,7 +666,9 @@ void MatteMA2PluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
+    // Sequence plugin: render() collects all frames in [start..end] via fetchImage(t),
+    // so the source clip must permit temporal access (effect-level was already true).
+    srcClip->setTemporalClipAccess(true);
     srcClip->setSupportsTiles(false);
     srcClip->setIsMask(false);
 

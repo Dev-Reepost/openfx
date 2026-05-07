@@ -220,6 +220,35 @@ public:
                        BasePlugin* basePlugin);
 
     /**
+     * @brief Submit a sequence job with pre-fetched frame data (NON-BLOCKING)
+     *
+     * All frames have already been fetched on the render thread (safe: fetchImage is
+     * only ever called from within OFX render actions).  This method:
+     *   1. Registers the job immediately (so the sequence guard sees it as active).
+     *   2. Launches a background thread that writes EXRs and submits to ComfyUI.
+     *
+     * The background thread NEVER calls fetchImage() — it only does disk I/O and HTTP.
+     *
+     * @param startFrame      First frame of the sequence (used as job key)
+     * @param frameData       Pre-fetched pixel data: frame number → ImageData
+     *                        Frames already on disk should be omitted (cache check done
+     *                        by the caller before fetching).
+     * @param inputFolder     Folder path for input EXR files
+     * @param basename        File basename (without frame number or extension)
+     * @param inputPathMap    Map passed to buildWorkflow (e.g. "InputA" → folder)
+     * @param firstOutputPath Expected path of the first output EXR (for polling)
+     * @param basePlugin      Used for buildWorkflow() callback
+     */
+    void submitSequenceJobAsync(
+        int startFrame,
+        std::map<int, ImageData> frameData,
+        const std::string& inputFolder,
+        const std::string& basename,
+        const std::map<std::string, std::string>& inputPathMap,
+        const std::string& firstOutputPath,
+        BasePlugin* basePlugin);
+
+    /**
      * @brief Get current status of a job
      *
      * @param frame Frame number to check
@@ -417,6 +446,10 @@ private:
     // Background monitoring thread
     std::thread _monitorThread;                    // Background polling thread
     std::atomic<bool> _shutdown;                   // Signal to stop monitoring
+
+    // Background sequence write thread (tracked so destructor can join it)
+    std::thread _writeThread;                      // Background fetch+write+submit thread
+    std::mutex _writeThreadMutex;                  // Protects _writeThread join/replace
 
     // Completion callback
     std::mutex _callbackMutex;                     // Protects callback

@@ -34,6 +34,8 @@ public:
     // Implement abstract methods from BasePlugin
     virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) override;
     virtual std::vector<std::string> getRequiredModels() override;
+    bool isSequencePlugin() const override { return true; }
+    int  getImageLoadCap()  const override;
 
     // OFX lifecycle
     virtual void changedParam(const OFX::InstanceChangedArgs &args,
@@ -54,6 +56,7 @@ private:
     OFX::ChoiceParam  *_direction;          // Propagation direction (forward/backward/both)
     OFX::IntParam     *_objId;             // Object ID to extract from output
     OFX::BooleanParam *_plotAllMasks;       // Show all detected masks vs. single object
+    OFX::IntParam     *_imageLoadCap;       // Max frames to load from sequence (0 = unlimited)
 
     // Model parameters
     OFX::StringParam  *_modelPath;          // SAM3 model path (relative to ComfyUI models dir)

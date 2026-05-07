@@ -22,7 +22,7 @@ DepthCrafterPlugin::DepthCrafterPlugin(OfxImageEffectHandle handle)
     , _enableModelCpuOffload(nullptr)
     , _enableSequentialCpuOffload(nullptr)
 {
-    _forceSize                  = fetchIntParam("forceSize");
+    _forceSize                  = fetchBooleanParam("forceSize");
     _numInferenceSteps          = fetchIntParam("numInferenceSteps");
     _guidanceScale              = fetchDoubleParam("guidanceScale");
     _windowSize                 = fetchIntParam("windowSize");
@@ -33,6 +33,12 @@ DepthCrafterPlugin::DepthCrafterPlugin(OfxImageEffectHandle handle)
 }
 
 DepthCrafterPlugin::~DepthCrafterPlugin() {}
+
+int DepthCrafterPlugin::getImageLoadCap() const {
+    int cap = 0;
+    if (_imageLoadCap) _imageLoadCap->getValue(cap);
+    return cap;
+}
 
 // ============================================================================
 // Workflow building
@@ -78,9 +84,9 @@ json DepthCrafterPlugin::buildHardcodedWorkflow(int frame, const std::string& in
 {
     if (_logger) _logger->info("Building hardcoded DepthCrafter workflow");
 
-    int forceSize, numInferenceSteps, windowSize, overlap, imageLoadCap;
+    bool forceSize, enableModelCpuOffload, enableSequentialCpuOffload;
+    int numInferenceSteps, windowSize, overlap, imageLoadCap;
     double guidanceScale;
-    bool enableModelCpuOffload, enableSequentialCpuOffload;
 
     _forceSize->getValue(forceSize);
     _numInferenceSteps->getValue(numInferenceSteps);
@@ -90,6 +96,10 @@ json DepthCrafterPlugin::buildHardcodedWorkflow(int frame, const std::string& in
     _imageLoadCap->getValue(imageLoadCap);
     _enableModelCpuOffload->getValue(enableModelCpuOffload);
     _enableSequentialCpuOffload->getValue(enableSequentialCpuOffload);
+
+    // Clamp window_size so DepthCrafter never allocates more than the actual frame count.
+    int effectiveWindowSize = (imageLoadCap > 0) ? std::min(windowSize, imageLoadCap) : windowSize;
+    int effectiveOverlap    = std::min(overlap, effectiveWindowSize - 1);
 
     std::string mountPath, project, workflow_name, version;
     _macMountPath->getValue(mountPath);
@@ -108,11 +118,11 @@ json DepthCrafterPlugin::buildHardcodedWorkflow(int frame, const std::string& in
 
     if (_logger) {
         _logger->info("DepthCrafter parameters:");
-        _logger->info("  Force size: {}", forceSize);
+        _logger->info("  Force size: {}", forceSize ? "true" : "false");
         _logger->info("  Inference steps: {}", numInferenceSteps);
         _logger->info("  Guidance scale: {}", guidanceScale);
-        _logger->info("  Window size: {}", windowSize);
-        _logger->info("  Overlap: {}", overlap);
+        _logger->info("  Window size: {} (clamped from {})", effectiveWindowSize, windowSize);
+        _logger->info("  Overlap: {} (clamped from {})", effectiveOverlap, overlap);
         _logger->info("  Image load cap: {}", imageLoadCap);
         _logger->info("  CPU offload: {}", enableModelCpuOffload);
         _logger->info("  Sequential CPU offload: {}", enableSequentialCpuOffload);
@@ -145,14 +155,14 @@ json DepthCrafterPlugin::buildHardcodedWorkflow(int frame, const std::string& in
             {"_meta", {{"title", "DownloadAndLoadDepthCrafterModel"}}}
         }},
 
-        // Node 24: DepthCrafter inference
+        // Node 24: DepthCrafter inference (window_size clamped to imageLoadCap)
         {"24", {
             {"inputs", {
                 {"force_size", forceSize},
                 {"num_inference_steps", numInferenceSteps},
                 {"guidance_scale", guidanceScale},
-                {"window_size", windowSize},
-                {"overlap", overlap},
+                {"window_size", effectiveWindowSize},
+                {"overlap", effectiveOverlap},
                 {"depthcrafter_model", json::array({"26", 0})},
                 {"images", json::array({"22", 0})}
             }},
@@ -189,9 +199,9 @@ json DepthCrafterPlugin::customizeWorkflowWithParams(const json& baseWorkflow, i
 {
     if (_logger) _logger->debug("Customizing DepthCrafter workflow with parameters");
 
-    int forceSize, numInferenceSteps, windowSize, overlap, imageLoadCap;
+    bool forceSize, enableModelCpuOffload, enableSequentialCpuOffload;
+    int numInferenceSteps, windowSize, overlap, imageLoadCap;
     double guidanceScale;
-    bool enableModelCpuOffload, enableSequentialCpuOffload;
 
     _forceSize->getValue(forceSize);
     _numInferenceSteps->getValue(numInferenceSteps);
@@ -201,6 +211,18 @@ json DepthCrafterPlugin::customizeWorkflowWithParams(const json& baseWorkflow, i
     _imageLoadCap->getValue(imageLoadCap);
     _enableModelCpuOffload->getValue(enableModelCpuOffload);
     _enableSequentialCpuOffload->getValue(enableSequentialCpuOffload);
+
+    // Clamp window_size to imageLoadCap so DepthCrafter never allocates a temporal
+    // attention window larger than the actual frame count — the primary OOM cause.
+    int effectiveWindowSize = (imageLoadCap > 0) ? std::min(windowSize, imageLoadCap) : windowSize;
+    // Overlap must be strictly less than window_size.
+    int effectiveOverlap = std::min(overlap, effectiveWindowSize - 1);
+    if (effectiveWindowSize != windowSize || effectiveOverlap != overlap) {
+        if (_logger) {
+            _logger->info("Clamped window_size {} → {} (imageLoadCap={}), overlap {} → {}",
+                          windowSize, effectiveWindowSize, imageLoadCap, overlap, effectiveOverlap);
+        }
+    }
 
     std::string workflowStr = baseWorkflow.dump();
 
@@ -212,11 +234,11 @@ json DepthCrafterPlugin::customizeWorkflowWithParams(const json& baseWorkflow, i
         }
     };
 
-    replaceNumeric("\"${FORCE_SIZE}\"",          std::to_string(forceSize));
+    replaceNumeric("\"${FORCE_SIZE}\"",          forceSize ? "true" : "false");
     replaceNumeric("\"${NUM_INFERENCE_STEPS}\"", std::to_string(numInferenceSteps));
     replaceNumeric("\"${GUIDANCE_SCALE}\"",      std::to_string(guidanceScale));
-    replaceNumeric("\"${WINDOW_SIZE}\"",         std::to_string(windowSize));
-    replaceNumeric("\"${OVERLAP}\"",             std::to_string(overlap));
+    replaceNumeric("\"${WINDOW_SIZE}\"",         std::to_string(effectiveWindowSize));
+    replaceNumeric("\"${OVERLAP}\"",             std::to_string(effectiveOverlap));
     replaceNumeric("\"${IMAGE_LOAD_CAP}\"",      std::to_string(imageLoadCap));
     replaceNumeric("\"${ENABLE_MODEL_CPU_OFFLOAD}\"",      enableModelCpuOffload      ? "true" : "false");
     replaceNumeric("\"${ENABLE_SEQUENTIAL_CPU_OFFLOAD}\"", enableSequentialCpuOffload ? "true" : "false");
@@ -256,14 +278,12 @@ void DepthCrafterPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     depthGroup->setOpen(true);
     page->addChild(*depthGroup);
 
-    // Force size
-    OFX::IntParamDescriptor *forceSize = desc.defineIntParam("forceSize");
+    // Force size (boolean flag — tells the DepthCrafter node to use its internal fixed size)
+    OFX::BooleanParamDescriptor *forceSize = desc.defineBooleanParam("forceSize");
     forceSize->setLabel("Force Size");
-    forceSize->setHint("Resize the shorter side of the input to this resolution before processing. "
-                       "Lower values are faster; 512 is the recommended default.");
-    forceSize->setDefault(512);
-    forceSize->setRange(64, 2048);
-    forceSize->setDisplayRange(128, 1024);
+    forceSize->setHint("When enabled, the DepthCrafter node uses its internal fixed resolution. "
+                       "Resize your source footage upstream (in Flame) to the desired resolution before processing.");
+    forceSize->setDefault(true);
     forceSize->setAnimates(false);
     forceSize->setParent(*depthGroup);
     page->addChild(*forceSize);
@@ -297,7 +317,7 @@ void DepthCrafterPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     windowSize->setLabel("Window Size");
     windowSize->setHint("Number of frames processed per temporal window. Must not exceed total frame count. "
                          "Larger windows improve temporal consistency but require more VRAM.");
-    windowSize->setDefault(110);
+    windowSize->setDefault(25);
     windowSize->setRange(2, 512);
     windowSize->setDisplayRange(10, 200);
     windowSize->setAnimates(false);
@@ -321,7 +341,7 @@ void DepthCrafterPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     imageLoadCap->setLabel("Frame Limit");
     imageLoadCap->setHint("Maximum number of frames to load from the sequence. "
                            "Set to 0 for no limit. Keep <= Window Size for best results.");
-    imageLoadCap->setDefault(49);
+    imageLoadCap->setDefault(25);
     imageLoadCap->setRange(0, 1024);
     imageLoadCap->setDisplayRange(0, 200);
     imageLoadCap->setAnimates(false);
@@ -355,8 +375,9 @@ void DepthCrafterPlugin::describeInContext(OFX::ImageEffectDescriptor &desc,
     enableSequentialCpuOffload->setParent(*modelGroup);
     page->addChild(*enableSequentialCpuOffload);
 
-    // Add common parameters
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults);
+    // Add common parameters — pass isSequencePlugin=true to omit the enable checkbox
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, configDefaults,
+                                         /*skipGroupHeaders=*/false, /*isSequencePlugin=*/true);
 
     // Override workflowName default for this plugin
     OFX::StringParamDescriptor *workflow = desc.defineStringParam("workflowName");
@@ -414,7 +435,8 @@ void DepthCrafterPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
         "consistent across video frames — unlike per-frame methods, it processes the entire "
         "sequence in temporal windows to preserve depth continuity over time.\n\n"
         "Typical settings:\n"
-        "- Force Size 512, Steps 10, Guidance 1.2 — fast, good quality\n"
+        "- Resize your source footage to the desired resolution upstream in Flame before processing\n"
+        "- Steps 10, Guidance 1.2 — fast, good quality\n"
         "- Window Size should match or exceed your sequence length for best consistency\n"
         "- Enable CPU Offload for GPUs with < 16 GB VRAM\n\n"
         "Note: DepthCrafter processes the full sequence per job, not per frame. "
@@ -436,7 +458,7 @@ void DepthCrafterPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setSupportsMultipleClipDepths(true);
@@ -449,7 +471,9 @@ void DepthCrafterPluginFactory::describeInContext(OFX::ImageEffectDescriptor &de
     OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
     srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-    srcClip->setTemporalClipAccess(false);
+    // Sequence plugin: render() collects all frames in [start..end] via fetchImage(t),
+    // so the source clip must permit temporal access (effect-level was already true).
+    srcClip->setTemporalClipAccess(true);
     srcClip->setSupportsTiles(false);
     srcClip->setIsMask(false);
 

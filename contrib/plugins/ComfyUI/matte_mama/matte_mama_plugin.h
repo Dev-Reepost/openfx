@@ -33,6 +33,8 @@ public:
 
     virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) override;
     virtual std::vector<std::string> getRequiredModels() override;
+    bool isSequencePlugin() const override { return true; }
+    int  getImageLoadCap()  const override;
 
     virtual void changedParam(const OFX::InstanceChangedArgs &args,
                               const std::string &paramName) override;

@@ -31,6 +31,8 @@ public:
 
     virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) override;
     virtual std::vector<std::string> getRequiredModels() override;
+    bool isSequencePlugin()          const override { return true; }
+    int  getImageLoadCap()           const override;
 
     static void describeInContext(OFX::ImageEffectDescriptor &desc,
                                   OFX::ContextEnum context,
@@ -38,7 +40,7 @@ public:
 
 private:
     // Processing parameters
-    OFX::IntParam    *_forceSize;          // Resize shorter side to this resolution
+    OFX::BooleanParam *_forceSize;         // Enable force-size mode (boolean flag for DepthCrafter node)
     OFX::IntParam    *_numInferenceSteps;  // Diffusion denoising steps
     OFX::DoubleParam *_guidanceScale;      // Classifier-free guidance scale
     OFX::IntParam    *_windowSize;         // Temporal window size (max frames per pass)

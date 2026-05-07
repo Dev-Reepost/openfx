@@ -4,6 +4,7 @@
 #include "comfyui_image_io.h"
 #define TINYEXR_IMPLEMENTATION
 #include <tinyexr.h>
+#include <spdlog/spdlog.h>
 #include <cstring>
 #include <algorithm>
 #include <cstdint>
@@ -60,30 +61,122 @@ static std::string getDirectory(const std::string& filepath) {
 }
 
 ImageData readEXR(const std::string& filename) {
-    float* rgba = nullptr;
-    int width, height;
-    const char* err = nullptr;
-
-    // Load EXR image
-    int ret = LoadEXR(&rgba, &width, &height, filename.c_str(), &err);
-
+    // Use TinyEXR's flexible header+image API instead of LoadEXR().
+    // LoadEXR() only handles RGBA-compatible files and reports
+    // "Invalid/Corrupted data" on perfectly valid RGB-only EXRs (e.g. depth maps
+    // emitted by ComfyUI's HQ-Image-Save SaveEXR node, which writes B/G/R with
+    // no alpha). We accept any channel layout and assemble a 4-channel
+    // (RGBA) ImageData for downstream consistency:
+    //   - R/G/B/A channels matched by name (case-insensitive); missing R/G/B
+    //     fall back to luminance Y (or to R replicated) for grayscale outputs;
+    //     missing A defaults to 1.0 (opaque).
+    EXRVersion version;
+    int ret = ParseEXRVersionFromFile(&version, filename.c_str());
     if (ret != TINYEXR_SUCCESS) {
-        std::string error_msg = "Failed to load EXR file: " + filename;
-        if (err) {
-            error_msg += " - " + std::string(err);
-            FreeEXRErrorMessage(err);
-        }
-        throw std::runtime_error(error_msg);
+        throw std::runtime_error("Failed to parse EXR version: " + filename);
     }
 
-    // Create ImageData
-    ImageData image(width, height, 4); // TinyEXR always loads as RGBA
+    EXRHeader header;
+    InitEXRHeader(&header);
+    const char* err = nullptr;
+    ret = ParseEXRHeaderFromFile(&header, &version, filename.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS) {
+        std::string msg = "Failed to parse EXR header: " + filename;
+        if (err) { msg += " - "; msg += err; FreeEXRErrorMessage(err); }
+        FreeEXRHeader(&header);
+        throw std::runtime_error(msg);
+    }
 
-    // Copy pixel data
-    std::memcpy(image.pixels.data(), rgba, width * height * 4 * sizeof(float));
+    // Force float decoding; the file may be HALF on disk.
+    for (int i = 0; i < header.num_channels; ++i) {
+        if (header.pixel_types[i] == TINYEXR_PIXELTYPE_HALF) {
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_FLOAT;
+        }
+    }
 
-    // Free TinyEXR memory
-    free(rgba);
+    EXRImage exrImage;
+    InitEXRImage(&exrImage);
+    ret = LoadEXRImageFromFile(&exrImage, &header, filename.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS) {
+        std::string msg = "Failed to load EXR pixels: " + filename;
+        if (err) { msg += " - "; msg += err; FreeEXRErrorMessage(err); }
+        FreeEXRHeader(&header);
+        throw std::runtime_error(msg);
+    }
+
+    int width  = exrImage.width;
+    int height = exrImage.height;
+
+    int rIdx = -1, gIdx = -1, bIdx = -1, aIdx = -1, yIdx = -1;
+    auto logger = spdlog::get("comfyui_plugin");
+    std::string channelSummary;
+    for (int i = 0; i < header.num_channels; ++i) {
+        const char* name = header.channels[i].name;
+        const char* typeStr = "?";
+        switch (header.pixel_types[i]) {
+            case TINYEXR_PIXELTYPE_UINT:  typeStr = "UINT";  break;
+            case TINYEXR_PIXELTYPE_HALF:  typeStr = "HALF→FLOAT"; break;
+            case TINYEXR_PIXELTYPE_FLOAT: typeStr = "FLOAT"; break;
+        }
+        if (!channelSummary.empty()) channelSummary += ", ";
+        channelSummary += std::string(name) + ":" + typeStr;
+        if      (name[0] == 'R' || name[0] == 'r') rIdx = i;
+        else if (name[0] == 'G' || name[0] == 'g') gIdx = i;
+        else if (name[0] == 'B' || name[0] == 'b') bIdx = i;
+        else if (name[0] == 'A' || name[0] == 'a') aIdx = i;
+        else if (name[0] == 'Y' || name[0] == 'y') yIdx = i;
+    }
+    if (logger) {
+        logger->info("readEXR: '{}' — {}x{}, {} channel(s): [{}]",
+                     filename, width, height, header.num_channels, channelSummary);
+        logger->info("  channel mapping: R={}, G={}, B={}, A={}, Y={} (synth A=1.0 if absent)",
+                     rIdx, gIdx, bIdx, aIdx, yIdx);
+    }
+
+    auto channelPtr = [&](int idx) -> const float* {
+        if (idx < 0) return nullptr;
+        return reinterpret_cast<const float*>(exrImage.images[idx]);
+    };
+    const float* rChan = channelPtr(rIdx);
+    const float* gChan = channelPtr(gIdx);
+    const float* bChan = channelPtr(bIdx);
+    const float* aChan = channelPtr(aIdx);
+    const float* yChan = channelPtr(yIdx);
+
+    // Grayscale fallbacks: single Y → replicate to RGB; single R → replicate to G,B.
+    if (!rChan && !gChan && !bChan && yChan) { rChan = gChan = bChan = yChan; }
+    if (rChan && !gChan) gChan = rChan;
+    if (rChan && !bChan) bChan = rChan;
+
+    ImageData image(width, height, 4);
+    const long npix = static_cast<long>(width) * static_cast<long>(height);
+    for (long i = 0; i < npix; ++i) {
+        image.pixels[i * 4 + 0] = rChan ? rChan[i] : 0.0f;
+        image.pixels[i * 4 + 1] = gChan ? gChan[i] : 0.0f;
+        image.pixels[i * 4 + 2] = bChan ? bChan[i] : 0.0f;
+        image.pixels[i * 4 + 3] = aChan ? aChan[i] : 1.0f;
+    }
+
+    if (logger) {
+        // Sample top-left, top-right, bottom-left, bottom-right corners (RGBA).
+        // Useful for sanity-checking orientation and decode correctness.
+        auto sample = [&](long x, long y) {
+            long i = (y * width + x) * 4;
+            return std::string("[") +
+                   std::to_string(image.pixels[i + 0]) + "," +
+                   std::to_string(image.pixels[i + 1]) + "," +
+                   std::to_string(image.pixels[i + 2]) + "," +
+                   std::to_string(image.pixels[i + 3]) + "]";
+        };
+        logger->info("  corners (top-left layout): TL={} TR={} BL={} BR={}",
+                     sample(0, 0),
+                     sample(width - 1, 0),
+                     sample(0, height - 1),
+                     sample(width - 1, height - 1));
+    }
+
+    FreeEXRImage(&exrImage);
+    FreeEXRHeader(&header);
 
     return image;
 }
@@ -175,13 +268,81 @@ void writeEXR(const std::string& filename, const ImageData& image) {
     }
 }
 
+void computeResizeDims(int srcWidth, int srcHeight, int targetShortSide,
+                        int& outWidth, int& outHeight)
+{
+    if (targetShortSide <= 0) {
+        outWidth  = srcWidth;
+        outHeight = srcHeight;
+        return;
+    }
+    int shorterSide  = std::min(srcWidth, srcHeight);
+    double scale     = static_cast<double>(targetShortSide) / shorterSide;
+    // Round to nearest even number (VAE requires even dimensions)
+    outWidth  = (static_cast<int>(std::round(srcWidth  * scale)) + 1) & ~1;
+    outHeight = (static_cast<int>(std::round(srcHeight * scale)) + 1) & ~1;
+}
+
+ImageData resize(const ImageData& src, int targetWidth, int targetHeight)
+{
+    if (src.width == targetWidth && src.height == targetHeight) {
+        return src;  // No-op
+    }
+    if (targetWidth <= 0 || targetHeight <= 0) {
+        throw std::runtime_error("resize: invalid target dimensions");
+    }
+
+    ImageData dst(targetWidth, targetHeight, src.channels);
+    const int ch = src.channels;
+
+    double scaleX = static_cast<double>(src.width)  / targetWidth;
+    double scaleY = static_cast<double>(src.height) / targetHeight;
+
+    for (int dstY = 0; dstY < targetHeight; ++dstY) {
+        double srcYf = (dstY + 0.5) * scaleY - 0.5;
+        int y0 = static_cast<int>(std::floor(srcYf));
+        int y1 = y0 + 1;
+        double fy = srcYf - y0;
+        y0 = std::max(0, std::min(y0, src.height - 1));
+        y1 = std::max(0, std::min(y1, src.height - 1));
+
+        for (int dstX = 0; dstX < targetWidth; ++dstX) {
+            double srcXf = (dstX + 0.5) * scaleX - 0.5;
+            int x0 = static_cast<int>(std::floor(srcXf));
+            int x1 = x0 + 1;
+            double fx = srcXf - x0;
+            x0 = std::max(0, std::min(x0, src.width - 1));
+            x1 = std::max(0, std::min(x1, src.width - 1));
+
+            const float* p00 = &src.pixels[(y0 * src.width + x0) * ch];
+            const float* p01 = &src.pixels[(y0 * src.width + x1) * ch];
+            const float* p10 = &src.pixels[(y1 * src.width + x0) * ch];
+            const float* p11 = &src.pixels[(y1 * src.width + x1) * ch];
+            float* out = &dst.pixels[(dstY * targetWidth + dstX) * ch];
+
+            double w00 = (1.0 - fx) * (1.0 - fy);
+            double w01 = fx          * (1.0 - fy);
+            double w10 = (1.0 - fx) * fy;
+            double w11 = fx          * fy;
+
+            for (int c = 0; c < ch; ++c) {
+                out[c] = static_cast<float>(
+                    w00 * p00[c] + w01 * p01[c] +
+                    w10 * p10[c] + w11 * p11[c]);
+            }
+        }
+    }
+    return dst;
+}
+
 ImageData fromOFXBuffer(
     const void* srcPixels,
     int width,
     int height,
     int rowBytes,
     int pixelComponents,
-    int bitDepth
+    int bitDepth,
+    bool flipY
 ) {
     if (!srcPixels) {
         throw std::runtime_error("Source pixel buffer is null!");
@@ -191,11 +352,11 @@ ImageData fromOFXBuffer(
 
     const uint8_t* src8 = static_cast<const uint8_t*>(srcPixels);
 
-    // IMPORTANT: Flip Y coordinate to convert from OFX (bottom-up) to EXR (top-down)
-    // OFX: origin at bottom-left, Y increases upward (OpenGL convention)
-    // EXR: origin at top-left, Y increases downward (standard image convention)
+    // OFX spec: origin at bottom-left (Y up). EXR: origin at top-left (Y down).
+    // Hosts that report nativeOrigin = TopLeft (DaVinci Resolve, etc.) already
+    // hand us top-left pixels — do not flip in that case.
     for (int y = 0; y < height; ++y) {
-        int srcY = height - 1 - y;  // Flip Y: bottom row becomes top row
+        int srcY = flipY ? (height - 1 - y) : y;
         const uint8_t* srcRow = src8 + srcY * rowBytes;
 
         for (int x = 0; x < width; ++x) {
@@ -236,7 +397,8 @@ void toOFXBuffer(
     void* dstPixels,
     int rowBytes,
     int pixelComponents,
-    int bitDepth
+    int bitDepth,
+    bool flipY
 ) {
     // Defensive parameter validation (prevents crashes from invalid input)
     if (!dstPixels) {
@@ -279,11 +441,11 @@ void toOFXBuffer(
 
     uint8_t* dst8 = static_cast<uint8_t*>(dstPixels);
 
-    // IMPORTANT: Flip Y coordinate to convert from EXR (top-down) to OFX (bottom-up)
-    // EXR: origin at top-left, Y increases downward (standard image convention)
-    // OFX: origin at bottom-left, Y increases upward (OpenGL convention)
+    // EXR: origin at top-left (Y down). OFX spec: origin at bottom-left (Y up).
+    // Hosts that report nativeOrigin = TopLeft (DaVinci Resolve, etc.) expect
+    // top-left pixels — do not flip in that case.
     for (int y = 0; y < image.height; ++y) {
-        int dstY = image.height - 1 - y;  // Flip Y: top row becomes bottom row
+        int dstY = flipY ? (image.height - 1 - y) : y;
         uint8_t* dstRow = dst8 + dstY * rowBytes;
 
         for (int x = 0; x < image.width; ++x) {

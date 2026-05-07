@@ -6,6 +6,7 @@
 
 #include "ofxsImageEffect.h"
 #include "comfyui_client.h"
+#include "comfyui_image_io.h"
 #include "async_job_manager.h"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -64,6 +65,10 @@ protected:
     OFX::DoubleParam *_refreshTrigger;         // Hidden parameter for cache invalidation
     OFX::StringParam *_jobStatus;              // Read-only job status display
     OFX::RGBParam *_jobStatusColor;            // Visual status indicator (color swatch)
+    OFX::ChoiceParam *_flipYMode;              // EXR Y-flip override: 0=Auto, 1=Always, 2=Never
+
+    // Sequence plugins only: button to collect all frames and submit the job
+    OFX::PushButtonParam *_collectAndSubmit;   // nullptr for non-sequence plugins
 
     // Instance identification
     std::string _instanceName;                 // OFX instance name for auto-basename generation
@@ -77,6 +82,46 @@ protected:
     mutable std::unordered_set<std::string> _cacheFileExists;  // Files known to exist
     mutable std::unordered_map<int, std::pair<int, int>> _cacheDimensions;  // Frame -> (width, height)
     mutable std::mutex _cacheMutex;                            // Protect cache access
+
+    // Sequence job state (only used when isSequencePlugin() == true)
+    // Tracks which output prefix has an active sequence job.  Empty = none submitted.
+    std::string _pendingSequenceOutputPrefix;
+    // The first frame of the last-submitted sequence — used to key into the job manager
+    // and to set SaveEXR.start_frame via ${FRAME} in customizeWorkflow().
+    int _sequenceStartFrame = 0;
+    // The last frame of the last-submitted sequence — used in onJobComplete() to seed
+    // the in-memory cache and fire refresh triggers for all frames, not just startFrame.
+    int _sequenceEndFrame = 0;
+
+    // Incremental frame collection (sequence plugins only).
+    // Each render(N) call fetches frame N on the render thread (safe: we are inside the
+    // OFX render action).  When all frames are collected we hand the data to the background
+    // thread for writing + submission.  The background thread NEVER calls fetchImage().
+    std::map<int, ImageData> _pendingFrames;   // frame → pixel data collected so far
+    std::string _pendingCollectionKey;          // identifies the current collection run
+    mutable std::mutex _pendingFramesMutex;    // protects _pendingFrames/_pendingCollectionKey
+
+    // Deferred Collect & Submit request.
+    // changedParam(collectAndSubmit) stashes the request and bumps _refreshTrigger; the
+    // next render() call performs the actual fetchImage loop on the render thread.
+    // Calling fetchImage() from changedParam deadlocks DaVinci Resolve / Fusion (the
+    // host's clipGetImage routes through Fusion::Input::GetSourceTagList which waits on
+    // the same UI thread that owns the in-flight changedParam) — so we always defer.
+    // The render thread is the OFX-canonical place for fetchImage() and works on every
+    // host (Flame, Nuke, Resolve, Fusion).
+    struct PendingCollectRequest {
+        bool active     = false;
+        int  startFrame = 0;
+        int  endFrame   = 0;
+    };
+    PendingCollectRequest _pendingCollect;
+    mutable std::mutex   _pendingCollectMutex;
+
+    // One-shot flag so shouldFlipYForOFX() logs its decision once per instance
+    // instead of once per frame. Mutable because shouldFlipYForOFX() is const.
+    mutable bool _flipDecisionLogged = false;
+
+
 
     // Logging
     std::shared_ptr<spdlog::logger> _logger;
@@ -107,6 +152,16 @@ public:
     // Returns false for specialized plugins (SAMSegmentation) where workflow is fixed
     virtual bool includeWorkflowInBasename() const { return false; }
 
+    // Sequence plugin support
+    // Returns true for plugins that process the full frame sequence as one ComfyUI job.
+    // Frame-based plugins (depth_da3, segmentation, anycomfy) leave this as false.
+    virtual bool isSequencePlugin() const { return false; }
+
+    // Maximum number of frames to load from the sequence (0 = unlimited).
+    // Sequence plugins that expose an imageLoadCap parameter override this.
+    virtual int getImageLoadCap() const { return 0; }
+
+
 protected:
     // Helper methods - Blocking workflow execution
     void executeWorkflow(const OFX::RenderArguments &args);
@@ -133,6 +188,20 @@ protected:
     json loadWorkflowFromFile(const std::string& filepath);
     json customizeWorkflow(const json& baseWorkflow, int frame, const std::map<std::string, std::string>& inputPaths);
 
+    // Sequence input helpers
+    // Returns folder path: {macMountPath}/in/projects/{project}/{workflow}/{version}/{basename}/
+    std::string constructInputFolderPath() const;
+    // Writes frames [startFrame..endFrame] from _srcClip to the input folder, one frame at a
+    // time on the calling (render) thread — satisfying the OFX main-thread constraint.
+    // Returns the folder path passed to the ComfyUI LoadEXR node.
+    std::string writeInputSequence(int startFrame, int endFrame);
+
+    // Drains a stashed Collect & Submit request, if any, on the render thread.
+    // Safe to call unconditionally at the top of render(); becomes a no-op when no
+    // request is pending. Sequence plugins only — non-sequence plugins never set the
+    // pending request flag.
+    void executePendingCollect();
+
     // Async rendering helper methods
     void renderBlocking(const OFX::RenderArguments &args);
     void renderAsync(const OFX::RenderArguments &args);
@@ -146,6 +215,12 @@ protected:
     void renderSolidColor(OFX::Image* dst, double r, double g, double b);
     int findLastValidFrame(double currentTime);
 
+    // Returns true if the host's pixel buffer origin is bottom-left (OFX spec
+    // default: Flame, Nuke). Returns false for top-left hosts (DaVinci Resolve,
+    // Premiere). Used by image_io to decide whether to flip Y on EXR I/O so the
+    // depth map / mask matches what the host actually displays.
+    bool shouldFlipYForOFX() const;
+
 public:
     // Static methods for parameter definition (called by derived plugin factories)
     static void describeCommonParameters(OFX::ImageEffectDescriptor &desc,
@@ -154,7 +229,8 @@ public:
                                          OFX::PageParamDescriptor *processingPage,
                                          OFX::PageParamDescriptor *serverPage,
                                          const json* configDefaults = nullptr,
-                                         bool skipGroupHeaders = false);
+                                         bool skipGroupHeaders = false,
+                                         bool isSequencePlugin = false);
 
     // Configuration file management (public for factory access)
     static json loadConfigDefaults();
