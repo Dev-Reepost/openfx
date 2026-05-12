@@ -331,7 +331,7 @@ the troubleshooting "host quirks" appendix.
 |---|---|---|
 | D1 | Suite name | ✅ Resolved: `AIFX` for display/branding; `aifx` for URLs and repo path (lowercase per GitHub convention). |
 | D2 | Repo location | ✅ Resolved: `github.com/Dev-Reepost/aifx`; Pages at `Dev-Reepost.github.io/aifx/`. |
-| D3 | OpenFX dependency | Submodule, `FetchContent`, or vendored copy. Recommendation: `FetchContent` pinned to a specific OpenFX tag — clean and reproducible. |
+| D3 | OpenFX dependency | ✅ Resolved: CMake `FetchContent`, pinned to a specific OpenFX tag. Contributors clone the AIFX repo, run `cmake`, and the OpenFX C API + Support library are fetched into `build/_deps/openfx-src/` automatically. Upgrades are a one-line `GIT_TAG` bump. |
 | D4 | CNC funding wording | Final approved program name and required attribution form. |
 | D5 | Image sourcing | ✅ Strategy resolved: fair-use reproduction with central attribution in `docs/assets/credits.md`. Per-plugin direct image URLs still to embed in the "Demos & comparisons" sections. |
 | D6 | Citation format | ✅ Resolved: `CITATION.cff` v1.2.0 at the repo root + per-plugin BibTeX in the docs. |

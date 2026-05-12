@@ -17,8 +17,9 @@ Before running the migration:
 - [ ] A round of plugin-output screenshots captured to populate
       `docs/assets/plugins/<plugin>/`. Replace any "image candidates marked
       not redistributable" notes.
-- [ ] OpenFX dependency strategy decided (submodule, FetchContent, or
-      vendored). See [§3 below](#3-resolve-the-openfx-dependency).
+- [x] OpenFX dependency strategy decided: **CMake `FetchContent`**, pinned
+      to a specific OpenFX tag. See [§3 below](#3-resolve-the-openfx-dependency)
+      for the CMake snippet.
 
 ## Migration steps
 
@@ -45,35 +46,29 @@ The `_research/` folder is staging-only and **does not** get copied.
 ### 3. Resolve the OpenFX dependency
 
 The plugins depend on the OpenFX C API and the C++ Support library from
-`AcademySoftwareFoundation/openfx`. Pick one:
-
-**A. CMake `FetchContent` (recommended).** Pin to a known-good OpenFX tag:
+`AcademySoftwareFoundation/openfx`. AIFX uses CMake `FetchContent` to pull
+these in at configure time, pinned to a specific OpenFX tag. Add this near
+the top of the new repo's root `CMakeLists.txt`:
 
 ```cmake
 include(FetchContent)
 FetchContent_Declare(
     openfx
     GIT_REPOSITORY https://github.com/AcademySoftwareFoundation/openfx.git
-    GIT_TAG        OFX_Release_2_0_BRANCH
+    GIT_TAG        OFX_Release_2_0_BRANCH   # pin to a tag or commit SHA
 )
 FetchContent_MakeAvailable(openfx)
 ```
 
-Pros: no submodules to manage, reproducible builds, clean repo.
-Cons: build-time download.
+Then add include paths and link against the OpenFX Support targets the
+plugins use (e.g. `OfxSupport`). Pick the exact `GIT_TAG` by checking the
+last known-good build in the openfx upstream fork.
 
-**B. git submodule.** Vendor a pinned commit:
-
-```bash
-git submodule add https://github.com/AcademySoftwareFoundation/openfx.git third_party/openfx
-git submodule update --init --recursive
-```
-
-Pros: explicit version pin in tree, offline builds work.
-Cons: contributors need to remember `--recurse-submodules`.
-
-**C. Vendored copy.** Copy the OpenFX headers and Support library into the
-repo. Not recommended — divergence from upstream becomes a maintenance burden.
+**Why FetchContent over the alternatives:** submodules force contributors
+to remember `--recurse-submodules` (constant footgun); vendoring commits
+OpenFX source into the AIFX repo and creates upstream-drift maintenance
+debt. FetchContent has neither problem and upgrades are a one-line
+`GIT_TAG` bump.
 
 ### 4. Copy plugin sources from the upstream fork
 
@@ -174,12 +169,12 @@ After the new public repo is live:
 See [RELEASE_SPEC.md §11](RELEASE_SPEC.md#11-open-decisions) for the
 authoritative list. The remaining headlines are:
 
-1. OpenFX dependency strategy.
-2. Final CNC funding wording.
+1. Final CNC funding wording.
+2. Code of Conduct (Contributor Covenant v2.1 unless preferred otherwise).
 3. Plugin demo imagery — embed direct upstream image URLs in the
    "Demos & comparisons" sections of each plugin page (the fair-use
    strategy and central credits page are already in place), and add
    self-generated screenshots as plugins are tested.
 
 Resolved: suite name (`AIFX`), repo location (`Dev-Reepost/aifx`),
-copyright year (`2026`).
+copyright year (`2026`), OpenFX dependency strategy (`FetchContent`).
