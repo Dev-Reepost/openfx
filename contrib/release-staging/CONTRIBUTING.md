@@ -1,4 +1,4 @@
-# Contributing to {{SUITE_NAME}}
+# Contributing to AIFX
 
 Thanks for considering a contribution. This document covers what to expect
 when filing issues, opening pull requests, and adding new plugins.

@@ -9,9 +9,9 @@ Before running the migration:
 
 - [ ] All seven plugins tested in at least one production OFX host. Results
       logged in [`RELEASE_SPEC.md` §10](RELEASE_SPEC.md#10-testing-plan).
-- [ ] Suite name decided. Replace `{{SUITE_NAME}}` everywhere.
+- [ ] Suite name decided. Replace `AIFX` everywhere.
 - [ ] Repo location decided (org/user + repo name). Replace `{{ORG}}` and
-      `{{REPO}}` everywhere.
+      `AIFX` everywhere.
 - [ ] CNC funding wording finalized. Update the placeholder in `README.md`,
       `docs/index.md`, and `_config.yml` footer.
 - [ ] Final review of model weight license summaries on each plugin page.
@@ -96,11 +96,12 @@ the plugins that are NOT in scope for V1 (`segmentation`, `anycomfy`, etc.).
 
 ### 5. Adjust paths and placeholders
 
-- Sweep for `{{SUITE_NAME}}`, `{{ORG}}`, `{{REPO}}`, `{{YEAR}}`:
+- Sweep for any remaining placeholders (`{{ORG}}`, `{{YEAR}}`, etc.):
   ```bash
   grep -r "{{[A-Z_]*}}" .
   ```
-  Replace each with the final value.
+  Replace each with the final value. (`{{SUITE_NAME}}` and `{{REPO}}` were
+  already resolved to `AIFX` in the staging tree.)
 
 - Update CMake include paths and `OFX_ROOT` references to match the new
   layout. The `build-plugin.sh` script needs its `OPENFX_ROOT` detection
@@ -128,7 +129,7 @@ clean root commit.
 ### 8. Push and configure the GitHub repo
 
 ```bash
-git remote add origin https://github.com/{{ORG}}/{{REPO}}.git
+git remote add origin https://github.com/{{ORG}}/AIFX.git
 git push -u origin main
 ```
 
@@ -167,8 +168,8 @@ After the new public repo is live:
 See [RELEASE_SPEC.md §11](RELEASE_SPEC.md#11-open-decisions) for the
 authoritative list. The headlines are:
 
-1. Suite name (`{{SUITE_NAME}}`).
-2. Repo location (`{{ORG}}/{{REPO}}`).
+1. Suite name (`AIFX`).
+2. Repo location (`{{ORG}}/AIFX`).
 3. OpenFX dependency strategy.
 4. Final CNC funding wording.
 5. Plugin demo imagery (replacing "candidates marked not redistributable"

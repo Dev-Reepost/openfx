@@ -6,7 +6,7 @@ nav_order: 7
 # Troubleshooting
 
 A grouped reference of the failure modes most users hit. If you don't find your
-issue here, see the [GitHub issues](https://github.com/{{ORG}}/{{REPO}}/issues).
+issue here, see the [GitHub issues](https://github.com/{{ORG}}/AIFX/issues).
 
 ## The plugin does not appear in my host
 

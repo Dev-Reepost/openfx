@@ -5,7 +5,7 @@ nav_order: 2
 
 # Installation
 
-{{SUITE_NAME}} ships as a set of OpenFX plugin bundles (`.ofx.bundle` directories).
+AIFX ships as a set of OpenFX plugin bundles (`.ofx.bundle` directories).
 Any application implementing the OpenFX 1.4 standard or later will discover and
 load them from the standard plugin directory for your operating system.
 
@@ -32,7 +32,7 @@ after installing or updating plugins.
 When prebuilt bundles are available, the install procedure is:
 
 1. Download the archive for your OS from the
-   [GitHub Releases](https://github.com/{{ORG}}/{{REPO}}/releases) page.
+   [GitHub Releases](https://github.com/{{ORG}}/AIFX/releases) page.
 2. Extract the `*.ofx.bundle` directories.
 3. Move each `.ofx.bundle` into one of the plugin directories from the table
    above. Use the system-wide directory if all users on the machine should see
@@ -54,8 +54,8 @@ When prebuilt bundles are available, the install procedure is:
 ### Build
 
 ```bash
-git clone https://github.com/{{ORG}}/{{REPO}}.git
-cd {{REPO}}
+git clone https://github.com/{{ORG}}/AIFX.git
+cd AIFX
 
 # Build and install all plugins to the per-user OFX directory:
 ./tools/build-plugin.sh plugins/depth_da3 --install
@@ -99,7 +99,7 @@ to CMake.
 
 1. Restart your OFX host.
 2. Open the effect / filter browser.
-3. Look under the **{{SUITE_NAME}}** category.
+3. Look under the **AIFX** category.
 4. Apply one of the plugins to a clip and check that the parameters panel
    appears.
 

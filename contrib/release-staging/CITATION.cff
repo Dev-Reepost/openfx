@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "{{SUITE_NAME}}"
+title: "AIFX"
 message: >-
   If you use these plugins in research or production, please cite both this
   work and the upstream models the plugins bridge to. See each plugin page
@@ -24,8 +24,8 @@ keywords:
   - matting
   - super-resolution
 license: BSD-3-Clause
-repository-code: "https://github.com/{{ORG}}/{{REPO}}"
-url: "https://{{ORG}}.github.io/{{REPO}}/"
+repository-code: "https://github.com/{{ORG}}/AIFX"
+url: "https://{{ORG}}.github.io/AIFX/"
 references:
   - type: article
     authors:

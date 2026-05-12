@@ -1,4 +1,4 @@
-# {{SUITE_NAME}}
+# AIFX
 
 Open-source OpenFX plugins that bring state-of-the-art ComfyUI AI models into
 any OFX-compatible compositor, editor, or color grading tool.
@@ -32,7 +32,7 @@ See [the plugin index](docs/plugins/) for what each one needs and how to use it.
    [docs/comfyui-server-setup.md](docs/comfyui-server-setup.md). Install
    ComfyUI, install the custom nodes for the plugins you want, download the
    model weights, and configure the shared input/output folders.
-3. **Use the plugins in your host** — they appear under the `{{SUITE_NAME}}`
+3. **Use the plugins in your host** — they appear under the `AIFX`
    category. Each plugin has parameters for the ComfyUI server URL, input/output
    folder paths, and model-specific settings. See the per-plugin pages.
 

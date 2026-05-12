@@ -1,4 +1,4 @@
-# {{SUITE_NAME}} — Public Release Specification
+# AIFX — Public Release Specification
 
 **Status:** Draft — pre-publication
 **Owner:** Julien Martin
@@ -63,7 +63,7 @@ Seven OFX plugins that bridge to ComfyUI:
 │   the OFX 1.4+ standard) │         │   GPU machine recommended)   │
 │                          │         │                              │
 │  ┌────────────────────┐  │  HTTP   │  ┌────────────────────────┐  │
-│  │ {{SUITE_NAME}}     │──┼─────────┼──▶ /prompt /history       │  │
+│  │ AIFX               │──┼─────────┼──▶ /prompt /history       │  │
 │  │ plugins (.ofx)     │  │         │  │ (REST + WebSocket)     │  │
 │  └────────────────────┘  │         │  └────────────────────────┘  │
 │           │              │         │           │                  │
@@ -143,7 +143,7 @@ page, GitHub). See per-plugin pages under `docs/plugins/` for citations.
 ## 6. Repository layout (for the new repo)
 
 ```
-{{SUITE_NAME}}/
+AIFX/
 ├── README.md                       ← landing page, quick start
 ├── LICENSE                         ← BSD-3-Clause
 ├── CITATION.cff                    ← machine-readable citation metadata
@@ -329,7 +329,7 @@ the troubleshooting "host quirks" appendix.
 
 | # | Decision | Notes |
 |---|---|---|
-| D1 | Suite name (`{{SUITE_NAME}}`) | Placeholder until decided. Affects repo name, plugin grouping label, doc site title. |
+| D1 | Suite name (`AIFX`) | Placeholder until decided. Affects repo name, plugin grouping label, doc site title. |
 | D2 | Repo location | GitHub org/user account for the new repo. |
 | D3 | OpenFX dependency | Submodule, `FetchContent`, or vendored copy. Recommendation: `FetchContent` pinned to a specific OpenFX tag — clean and reproducible. |
 | D4 | CNC funding wording | Final approved program name and required attribution form. |
@@ -349,7 +349,7 @@ created via:
 4. Copy shared common code (`contrib/plugins/ComfyUI/common/` → `plugins/common/`).
 5. Copy build helpers (`contrib/dev-tools/build-plugin.sh` → `tools/`).
 6. Adjust `CMakeLists.txt` paths.
-7. Replace `{{SUITE_NAME}}` placeholders globally.
+7. Replace `AIFX` placeholders globally.
 8. Insert final CNC wording and any other decision-blocked content.
 9. `git add . && git commit -m "Initial public release"`.
 10. `git remote add origin <new repo URL> && git push origin main`.

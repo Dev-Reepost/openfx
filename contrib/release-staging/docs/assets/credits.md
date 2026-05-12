@@ -6,7 +6,7 @@ nav_order: 9
 # Image credits & attribution
 
 This page lists every upstream image, figure, and demo asset referenced in
-the {{SUITE_NAME}} documentation, with full attribution and the applicable
+the AIFX documentation, with full attribution and the applicable
 license terms.
 
 ## Policy
@@ -20,7 +20,7 @@ original authors and citation to the source publications.
 The repository's BSD-3-Clause license applies to the plugin code only. Each
 image listed below retains the license of its original source. If you are an
 author and would prefer a different attribution form, or removal, please
-[open an issue](https://github.com/{{ORG}}/{{REPO}}/issues) and we will
+[open an issue](https://github.com/{{ORG}}/AIFX/issues) and we will
 respond promptly.
 
 ## Sources by plugin

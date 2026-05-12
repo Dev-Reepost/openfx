@@ -1,21 +1,21 @@
-# Jekyll configuration for the {{SUITE_NAME}} GitHub Pages site.
+# Jekyll configuration for the AIFX GitHub Pages site.
 # Theme: just-the-docs (technical documentation, sidebar nav, search).
 #
 # This config assumes the site is served from the /docs folder of the repo
 # and built by GitHub Actions. To switch to a different hosting setup, see:
 #   - https://just-the-docs.com/docs/configuration/
 
-title: "{{SUITE_NAME}}"
+title: "AIFX"
 description: >-
   OpenFX plugins bridging ComfyUI AI models into any OFX-compatible
   compositor, editor, or color grading tool.
 
 # The base URL the site is served from. Override with the actual repo path
-# at deploy time, e.g. "/{{SUITE_NAME}}".
+# at deploy time, e.g. "/AIFX".
 baseurl: ""
 url: "https://{{ORG}}.github.io"
 
-repository: "{{ORG}}/{{REPO}}"
+repository: "{{ORG}}/AIFX"
 
 # Source content lives in /docs (this repo layout).
 source: docs
@@ -54,7 +54,7 @@ footer_content: >-
 # Aux links in the top-right corner of the navigation bar.
 aux_links:
   "GitHub":
-    - "https://github.com/{{ORG}}/{{REPO}}"
+    - "https://github.com/{{ORG}}/AIFX"
 
 # Heading anchors for in-page sectioning.
 heading_anchors: true

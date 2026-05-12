@@ -3,7 +3,7 @@ title: Home
 nav_order: 1
 ---
 
-# {{SUITE_NAME}}
+# AIFX
 
 State-of-the-art ComfyUI AI models, available as OpenFX plugins for any
 OFX-compatible compositor, editor, or color grading tool.
