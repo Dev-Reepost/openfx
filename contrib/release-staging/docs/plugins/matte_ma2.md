@@ -55,6 +55,18 @@ agreement with NTUitive / SenseTime.
 
 Plus the standard ComfyUI base parameters.
 
+## Demos & comparisons
+
+- **MatAnyone2 project page** — [pq-yang.github.io/projects/MatAnyone2](https://pq-yang.github.io/projects/MatAnyone2/) — teaser, hair/edge demonstrations, v1-vs-v2 comparisons.
+- **MatAnyone (v1) project page** — [pq-yang.github.io/projects/MatAnyone](https://pq-yang.github.io/projects/MatAnyone/) — extensive demo gallery on difficult shots.
+- **GitHub** — [pq-yang/MatAnyone2](https://github.com/pq-yang/MatAnyone2) — code and pretrained checkpoint.
+
+Image attribution: Yang et al., S-Lab @ NTU + SenseTime, CVPR 2025/2026;
+reproduced for documentation purposes with citation to
+[arXiv:2512.11782](https://arxiv.org/abs/2512.11782) and
+[arXiv:2501.14677](https://arxiv.org/abs/2501.14677). See the
+[credits page](../assets/credits.md).
+
 ## Performance
 
 - Each frame is a single forward pass with a recurrent state — no iterative

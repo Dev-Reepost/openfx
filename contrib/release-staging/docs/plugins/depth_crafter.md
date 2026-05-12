@@ -59,6 +59,19 @@ Stability AI for commercial agreements.
 
 Plus the standard ComfyUI base parameters.
 
+## Demos & comparisons
+
+The strongest argument for a temporally-consistent depth model is visual.
+The upstream sources show side-by-side reels against per-frame methods:
+
+- **Project page** — [depthcrafter.github.io](https://depthcrafter.github.io/) — hero comparison videos vs. Depth Anything, Marigold, NVDS, ChronoDepth.
+- **GitHub README** — [Tencent/DepthCrafter](https://github.com/Tencent/DepthCrafter) — animated open-world clips with their depth sequences.
+
+Image attribution: Hu et al., Tencent AI Lab, CVPR 2025 Highlight;
+reproduced for documentation purposes with citation to
+[arXiv:2409.02095](https://arxiv.org/abs/2409.02095).
+See the [credits page](../assets/credits.md).
+
 ## Performance
 
 - ~2.1 fps at 1024×576 on an A100 (~465 ms/frame), times the number of

@@ -54,6 +54,18 @@ production** without engaging Stability AI for a commercial license.
 Plus the standard ComfyUI base parameters (server URL, mount paths, project
 name, workflow path).
 
+## Demos & comparisons
+
+To see what this model produces, the upstream sources have the most
+authoritative demos:
+
+- **Project page** — [normalcrafter.github.io](https://normalcrafter.github.io/) — side-by-side video comparisons against per-frame normal estimators.
+- **GitHub README** — [Binyr/NormalCrafter](https://github.com/Binyr/NormalCrafter) — open-world clips with their normal sequences.
+
+Image attribution: Bin et al., ICCV 2025; reproduced for documentation
+purposes with citation to [arXiv:2504.11427](https://arxiv.org/abs/2504.11427).
+See the [credits page](../assets/credits.md).
+
 ## Limitations
 
 - **Per-frame invocation:** the upstream model is sequence-aware via a sliding

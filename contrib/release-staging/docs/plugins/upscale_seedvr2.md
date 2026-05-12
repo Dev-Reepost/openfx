@@ -71,6 +71,16 @@ redistributions. Cite the ICLR 2026 paper.
 
 Plus the standard ComfyUI base parameters.
 
+## Demos & comparisons
+
+- **Project page** — [iceclear.github.io/projects/seedvr2](https://iceclear.github.io/projects/seedvr2/) — side-by-side LR input / SeedVR2 / multi-step baselines (RealBasicVSR, Upscale-A-Video, VEnhancer).
+- **GitHub README** — [ByteDance-Seed/SeedVR](https://github.com/ByteDance-Seed/SeedVR) — degraded real-world plates restored to high resolution. Repository assets are Apache 2.0 (redistributable with NOTICE preserved).
+
+Image attribution: Wang et al., ByteDance Seed, ICLR 2026; reproduced for
+documentation purposes with citation to
+[arXiv:2506.05301](https://arxiv.org/abs/2506.05301). See the
+[credits page](../assets/credits.md).
+
 ## Performance
 
 - One-step inference (vs. 15–50 steps for prior diffusion VR models) — paper

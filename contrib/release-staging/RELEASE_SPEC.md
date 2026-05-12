@@ -262,9 +262,18 @@ GitHub Actions workflow `pages.yml`: on push to `main`, build Jekyll, deploy to
 
 ### Asset pipeline
 
-Plugin imagery lives at `docs/assets/plugins/<plugin>/`. Sourced from upstream
-project pages with attribution preserved. See the `_research/` briefs for
-specific image candidates and license verification.
+Plugin imagery is sourced from upstream project pages, papers, and GitHub
+repositories under fair-use / fair-dealing for documentation purposes, with
+full attribution recorded centrally in `docs/assets/credits.md` and linked
+from the site footer. Each plugin page's "Demos & comparisons" section
+prominently links to upstream sources; embedded images can be added by either
+hot-linking or mirroring into `docs/assets/plugins/<plugin>/`, always paired
+with a caption containing source / authors / year / license / paper citation.
+
+Self-generated imagery (parameter-panel screenshots, before/after frames from
+CC0 or owned plates) is preferred where available but not required for V1.
+The credits page invites upstream authors to request alternative attribution
+or removal via GitHub issue.
 
 ## 9. Build and distribution plan
 

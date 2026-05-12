@@ -59,6 +59,17 @@ attached. Acknowledgement is required in any publication using SAM materials.
 
 Plus the standard ComfyUI base parameters.
 
+## Demos & comparisons
+
+- **Project page** — [ai.meta.com/sam3](https://ai.meta.com/sam3/) — Meta's official demos and capability overview.
+- **Blog post** — [ai.meta.com/blog/segment-anything-model-3](https://ai.meta.com/blog/segment-anything-model-3/) — release announcement with hero illustrations and worked examples.
+- **Interactive demo** — [segment-anything.com](https://segment-anything.com/) — try it on your own images.
+- **GitHub examples** — [facebookresearch/sam3 notebooks](https://github.com/facebookresearch/sam3/tree/main/notebooks) — example outputs.
+
+Image attribution: © Meta Platforms, Inc.; reproduced for documentation
+purposes with citation to [arXiv:2511.16719](https://arxiv.org/abs/2511.16719).
+See the [credits page](../assets/credits.md).
+
 ## Performance
 
 - ~30 ms per image (H200, 100+ objects).

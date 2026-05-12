@@ -1,4 +1,4 @@
-Per-plugin asset directories live here:
+Per-plugin asset directories for locally-hosted images live here:
 
   docs/assets/plugins/depth_da3/
   docs/assets/plugins/normal_crafter/
@@ -8,28 +8,37 @@ Per-plugin asset directories live here:
   docs/assets/plugins/matte_ma2/
   docs/assets/plugins/upscale_seedvr2/
 
-Each will hold:
-  - hero.{jpg,png,webp}    : the plugin's primary doc image (top of page).
-  - example-N.{jpg,png}    : additional example imagery.
-  - parameters.{jpg,png}   : screenshot of the parameters panel in a host.
-  - workflow.{jpg,png}     : the underlying ComfyUI workflow.
+CURRENT IMAGERY STRATEGY
+========================
 
-License note for image sourcing:
+The plugin documentation pages reference upstream project pages, papers, and
+GitHub repositories for demos and example imagery, with full attribution
+recorded in:
 
-The research briefs in /contrib/release-staging/_research/ identified upstream
-images that would be ideal for each plugin's documentation. With few
-exceptions, those upstream sources do NOT permit redistribution under our
-BSD-3-Clause license.
+  docs/assets/credits.md
 
-Recommended approach for each plugin:
-  1. Generate fresh example output by running the plugin on CC0 / owned
-     plates.
-  2. Capture parameter-panel and workflow screenshots from a real host
-     session.
-  3. Save the resulting JPG/PNG into this directory and reference from the
-     plugin's docs/plugins/<plugin>.md page.
-  4. Reserve upstream images for "see also" link-outs only, with proper
-     attribution.
+Reusing those images for documentation purposes — with citation and license
+recall — is a standard fair-use / fair-dealing practice for technical writing
+about academic ML work.
 
-Once images are added to each subdirectory, this .placeholder file can be
-removed and the subdirectory itself will be tracked by Jekyll.
+For each plugin page, the "Demos & comparisons" section currently links out
+to upstream sources. To embed images directly:
+
+1. Pick the desired image from the upstream source.
+2. Either:
+   (a) Hot-link to the upstream URL with attribution caption, OR
+   (b) Mirror the image into the per-plugin directory below with the
+       source URL preserved in the file name or alt text.
+3. Update the relevant docs/plugins/<plugin>.md page with the markdown image
+   embed, plus a one-line caption containing source / authors / year /
+   license / paper citation.
+4. Ensure the credits page (docs/assets/credits.md) lists the image with
+   the same metadata.
+
+When self-generated screenshots are eventually produced from the plugins,
+they become preferable for:
+- Parameter panel screenshots from a host UI.
+- Before/after frames from CC0 or owned plates.
+- Workflow JSON node graphs.
+
+Save those into the relevant subdirectory.

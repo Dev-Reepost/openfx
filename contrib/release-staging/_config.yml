@@ -45,8 +45,11 @@ color_scheme: light
 # Footer.
 footer_content: >-
   Plugin code is BSD-3-Clause. Model weights are subject to their upstream
-  licenses; see each plugin page. Supported by CNC (Centre national du
-  cinéma et de l'image animée).
+  licenses; see each plugin page. Images from upstream model authors are
+  reproduced for documentation purposes under applicable fair-use /
+  fair-dealing provisions with attribution; see the
+  <a href="/{{site.baseurl}}/assets/credits/">credits page</a>. Supported by
+  CNC (Centre national du cinéma et de l'image animée).
 
 # Aux links in the top-right corner of the navigation bar.
 aux_links:

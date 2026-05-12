@@ -57,6 +57,17 @@ require non-commercial use.
 
 Plus the standard ComfyUI base parameters.
 
+## Demos & comparisons
+
+- **Project page** — [cvlab-kaist.github.io/VideoMaMa](https://cvlab-kaist.github.io/VideoMaMa/) — side-by-side input mask vs. refined alpha on hair-heavy subjects, comparison reels vs. MatAnyone and RVM.
+- **Hugging Face Space demo** — [SammyLim/VideoMaMa](https://huggingface.co/spaces/SammyLim/VideoMaMa) — try the model on your own clips.
+- **arXiv paper figures** — [arxiv.org/html/2601.14255v1](https://arxiv.org/html/2601.14255v1) — qualitative before/after grids.
+
+Image attribution: Lim et al., KAIST CVLab / Korea University / Adobe
+Research, CVPR 2026; reproduced for documentation purposes with citation to
+[arXiv:2601.14255](https://arxiv.org/abs/2601.14255). See the
+[credits page](../assets/credits.md).
+
 ## Performance
 
 - Single forward pass per window — fast for a video diffusion model, but

@@ -60,6 +60,19 @@ paths, project name, workflow path) plus:
 | **Process Resolution** | Internal processing resolution. Higher = more detail, more VRAM. |
 | **Output Mode** | Relative depth (default) or metric depth (METRIC-LARGE only). |
 
+## Demos & comparisons
+
+To see what this model produces, the upstream sources have the most
+authoritative demos:
+
+- **Project page** — [depth-anything-3.github.io](https://depth-anything-3.github.io/) — gallery and comparisons against DA2 and VGGT.
+- **Hugging Face Space** — [interactive demo](https://huggingface.co/spaces/depth-anything/depth-anything-3) — upload your own image and see the result.
+- **GitHub README** — [ByteDance-Seed/Depth-Anything-3](https://github.com/ByteDance-Seed/Depth-Anything-3) — side-by-side RGB / depth / point-cloud comparisons.
+
+Image attribution: ByteDance Seed; reproduced for documentation purposes
+with citation to [arXiv:2511.10647](https://arxiv.org/abs/2511.10647).
+See the [credits page](../assets/credits.md).
+
 ## Limitations
 
 - Depth is **relative / affine-invariant** unless you use the metric variant.
