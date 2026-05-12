@@ -32,7 +32,7 @@ after installing or updating plugins.
 When prebuilt bundles are available, the install procedure is:
 
 1. Download the archive for your OS from the
-   [GitHub Releases](https://github.com/{{ORG}}/AIFX/releases) page.
+   [GitHub Releases](https://github.com/Dev-Reepost/AIFX/releases) page.
 2. Extract the `*.ofx.bundle` directories.
 3. Move each `.ofx.bundle` into one of the plugin directories from the table
    above. Use the system-wide directory if all users on the machine should see
@@ -54,7 +54,7 @@ When prebuilt bundles are available, the install procedure is:
 ### Build
 
 ```bash
-git clone https://github.com/{{ORG}}/AIFX.git
+git clone https://github.com/Dev-Reepost/AIFX.git
 cd AIFX
 
 # Build and install all plugins to the per-user OFX directory:

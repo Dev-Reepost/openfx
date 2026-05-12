@@ -9,9 +9,8 @@ Before running the migration:
 
 - [ ] All seven plugins tested in at least one production OFX host. Results
       logged in [`RELEASE_SPEC.md` §10](RELEASE_SPEC.md#10-testing-plan).
-- [ ] Suite name decided. Replace `AIFX` everywhere.
-- [ ] Repo location decided (org/user + repo name). Replace `{{ORG}}` and
-      `AIFX` everywhere.
+- [x] Suite name decided: `AIFX`.
+- [x] Repo location decided: `Dev-Reepost/AIFX`.
 - [ ] CNC funding wording finalized. Update the placeholder in `README.md`,
       `docs/index.md`, and `_config.yml` footer.
 - [ ] Final review of model weight license summaries on each plugin page.
@@ -96,12 +95,13 @@ the plugins that are NOT in scope for V1 (`segmentation`, `anycomfy`, etc.).
 
 ### 5. Adjust paths and placeholders
 
-- Sweep for any remaining placeholders (`{{ORG}}`, `{{YEAR}}`, etc.):
+- Sweep for any remaining `{{...}}` placeholders:
   ```bash
   grep -r "{{[A-Z_]*}}" .
   ```
-  Replace each with the final value. (`{{SUITE_NAME}}` and `{{REPO}}` were
-  already resolved to `AIFX` in the staging tree.)
+  At the time the staging tree was prepared, `{{SUITE_NAME}}` → `AIFX`,
+  `{{REPO}}` → `AIFX`, `{{ORG}}` → `Dev-Reepost`, and `{{YEAR}}` → `2026`
+  were already resolved. Anything new added later will surface here.
 
 - Update CMake include paths and `OFX_ROOT` references to match the new
   layout. The `build-plugin.sh` script needs its `OPENFX_ROOT` detection
@@ -129,7 +129,7 @@ clean root commit.
 ### 8. Push and configure the GitHub repo
 
 ```bash
-git remote add origin https://github.com/{{ORG}}/AIFX.git
+git remote add origin https://github.com/Dev-Reepost/AIFX.git
 git push -u origin main
 ```
 
@@ -166,11 +166,14 @@ After the new public repo is live:
 ## Open issues to address before V1.0.0
 
 See [RELEASE_SPEC.md §11](RELEASE_SPEC.md#11-open-decisions) for the
-authoritative list. The headlines are:
+authoritative list. The remaining headlines are:
 
-1. Suite name (`AIFX`).
-2. Repo location (`{{ORG}}/AIFX`).
-3. OpenFX dependency strategy.
-4. Final CNC funding wording.
-5. Plugin demo imagery (replacing "candidates marked not redistributable"
-   with self-generated screenshots).
+1. OpenFX dependency strategy.
+2. Final CNC funding wording.
+3. Plugin demo imagery — embed direct upstream image URLs in the
+   "Demos & comparisons" sections of each plugin page (the fair-use
+   strategy and central credits page are already in place), and add
+   self-generated screenshots as plugins are tested.
+
+Resolved: suite name (`AIFX`), repo location (`Dev-Reepost/AIFX`),
+copyright year (`2026`).

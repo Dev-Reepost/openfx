@@ -24,8 +24,8 @@ keywords:
   - matting
   - super-resolution
 license: BSD-3-Clause
-repository-code: "https://github.com/{{ORG}}/AIFX"
-url: "https://{{ORG}}.github.io/AIFX/"
+repository-code: "https://github.com/Dev-Reepost/AIFX"
+url: "https://Dev-Reepost.github.io/AIFX/"
 references:
   - type: article
     authors:

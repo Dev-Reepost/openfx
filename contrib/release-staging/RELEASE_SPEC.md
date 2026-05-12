@@ -329,13 +329,13 @@ the troubleshooting "host quirks" appendix.
 
 | # | Decision | Notes |
 |---|---|---|
-| D1 | Suite name (`AIFX`) | Placeholder until decided. Affects repo name, plugin grouping label, doc site title. |
-| D2 | Repo location | GitHub org/user account for the new repo. |
+| D1 | Suite name | ✅ Resolved: `AIFX`. |
+| D2 | Repo location | ✅ Resolved: `Dev-Reepost/AIFX`. |
 | D3 | OpenFX dependency | Submodule, `FetchContent`, or vendored copy. Recommendation: `FetchContent` pinned to a specific OpenFX tag — clean and reproducible. |
 | D4 | CNC funding wording | Final approved program name and required attribution form. |
-| D5 | Image sourcing | Per-plugin: which upstream images to redistribute, after license verification (see `_research/`). |
-| D6 | Citation format | `CITATION.cff` v1.2.0 + per-plugin BibTeX in the docs. |
-| D7 | Issue templates | Bug, feature request, plugin idea. |
+| D5 | Image sourcing | ✅ Strategy resolved: fair-use reproduction with central attribution in `docs/assets/credits.md`. Per-plugin direct image URLs still to embed in the "Demos & comparisons" sections. |
+| D6 | Citation format | ✅ Resolved: `CITATION.cff` v1.2.0 at the repo root + per-plugin BibTeX in the docs. |
+| D7 | Issue templates | ✅ Resolved: bug + feature templates in `.github/ISSUE_TEMPLATE/`. |
 | D8 | Code of Conduct | Contributor Covenant v2.1 unless the team has a preferred alternative. |
 
 ## 12. Migration playbook

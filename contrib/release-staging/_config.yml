@@ -13,9 +13,9 @@ description: >-
 # The base URL the site is served from. Override with the actual repo path
 # at deploy time, e.g. "/AIFX".
 baseurl: ""
-url: "https://{{ORG}}.github.io"
+url: "https://Dev-Reepost.github.io"
 
-repository: "{{ORG}}/AIFX"
+repository: "Dev-Reepost/AIFX"
 
 # Source content lives in /docs (this repo layout).
 source: docs
@@ -54,7 +54,7 @@ footer_content: >-
 # Aux links in the top-right corner of the navigation bar.
 aux_links:
   "GitHub":
-    - "https://github.com/{{ORG}}/AIFX"
+    - "https://github.com/Dev-Reepost/AIFX"
 
 # Heading anchors for in-page sectioning.
 heading_anchors: true

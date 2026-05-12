@@ -68,7 +68,7 @@ For the per-frame vs sequence design and the `isSequencePlugin()` hook, see
 
   ```
   // SPDX-License-Identifier: BSD-3-Clause
-  // Copyright {{YEAR}} OpenFX and contributors to the OpenFX project.
+  // Copyright 2026 OpenFX and contributors to the OpenFX project.
   ```
 
 ## License
