@@ -10,12 +10,13 @@ description: >-
   OpenFX plugins bridging ComfyUI AI models into any OFX-compatible
   compositor, editor, or color grading tool.
 
-# The base URL the site is served from. Override with the actual repo path
-# at deploy time, e.g. "/AIFX".
-baseurl: ""
+# The base URL the site is served from. Project Pages serve under the repo
+# path; user/org Pages serve at root. Since the repo is Dev-Reepost/aifx,
+# the site lives at https://Dev-Reepost.github.io/aifx/.
+baseurl: "/aifx"
 url: "https://Dev-Reepost.github.io"
 
-repository: "Dev-Reepost/AIFX"
+repository: "Dev-Reepost/aifx"
 
 # Source content lives in /docs (this repo layout).
 source: docs
@@ -54,7 +55,7 @@ footer_content: >-
 # Aux links in the top-right corner of the navigation bar.
 aux_links:
   "GitHub":
-    - "https://github.com/Dev-Reepost/AIFX"
+    - "https://github.com/Dev-Reepost/aifx"
 
 # Heading anchors for in-page sectioning.
 heading_anchors: true

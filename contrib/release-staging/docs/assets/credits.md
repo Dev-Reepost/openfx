@@ -20,7 +20,7 @@ original authors and citation to the source publications.
 The repository's BSD-3-Clause license applies to the plugin code only. Each
 image listed below retains the license of its original source. If you are an
 author and would prefer a different attribution form, or removal, please
-[open an issue](https://github.com/Dev-Reepost/AIFX/issues) and we will
+[open an issue](https://github.com/Dev-Reepost/aifx/issues) and we will
 respond promptly.
 
 ## Sources by plugin

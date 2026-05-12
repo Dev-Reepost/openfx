@@ -10,7 +10,7 @@ Before running the migration:
 - [ ] All seven plugins tested in at least one production OFX host. Results
       logged in [`RELEASE_SPEC.md` §10](RELEASE_SPEC.md#10-testing-plan).
 - [x] Suite name decided: `AIFX`.
-- [x] Repo location decided: `Dev-Reepost/AIFX`.
+- [x] Repo location decided: `Dev-Reepost/aifx`.
 - [ ] CNC funding wording finalized. Update the placeholder in `README.md`,
       `docs/index.md`, and `_config.yml` footer.
 - [ ] Final review of model weight license summaries on each plugin page.
@@ -99,9 +99,15 @@ the plugins that are NOT in scope for V1 (`segmentation`, `anycomfy`, etc.).
   ```bash
   grep -r "{{[A-Z_]*}}" .
   ```
-  At the time the staging tree was prepared, `{{SUITE_NAME}}` → `AIFX`,
-  `{{REPO}}` → `AIFX`, `{{ORG}}` → `Dev-Reepost`, and `{{YEAR}}` → `2026`
-  were already resolved. Anything new added later will surface here.
+  At the time the staging tree was prepared, the following placeholders were
+  already resolved:
+  - `{{SUITE_NAME}}` → `AIFX` (display name / branding)
+  - `{{REPO}}` → `aifx` in URL contexts, `AIFX` in display contexts
+    (GitHub repo paths follow the lowercase convention)
+  - `{{ORG}}` → `Dev-Reepost`
+  - `{{YEAR}}` → `2026`
+
+  Anything new added later will surface here.
 
 - Update CMake include paths and `OFX_ROOT` references to match the new
   layout. The `build-plugin.sh` script needs its `OPENFX_ROOT` detection
@@ -129,7 +135,7 @@ clean root commit.
 ### 8. Push and configure the GitHub repo
 
 ```bash
-git remote add origin https://github.com/Dev-Reepost/AIFX.git
+git remote add origin https://github.com/Dev-Reepost/aifx.git
 git push -u origin main
 ```
 
@@ -175,5 +181,5 @@ authoritative list. The remaining headlines are:
    strategy and central credits page are already in place), and add
    self-generated screenshots as plugins are tested.
 
-Resolved: suite name (`AIFX`), repo location (`Dev-Reepost/AIFX`),
+Resolved: suite name (`AIFX`), repo location (`Dev-Reepost/aifx`),
 copyright year (`2026`).

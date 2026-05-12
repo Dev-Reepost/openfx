@@ -329,8 +329,8 @@ the troubleshooting "host quirks" appendix.
 
 | # | Decision | Notes |
 |---|---|---|
-| D1 | Suite name | ✅ Resolved: `AIFX`. |
-| D2 | Repo location | ✅ Resolved: `Dev-Reepost/AIFX`. |
+| D1 | Suite name | ✅ Resolved: `AIFX` for display/branding; `aifx` for URLs and repo path (lowercase per GitHub convention). |
+| D2 | Repo location | ✅ Resolved: `github.com/Dev-Reepost/aifx`; Pages at `Dev-Reepost.github.io/aifx/`. |
 | D3 | OpenFX dependency | Submodule, `FetchContent`, or vendored copy. Recommendation: `FetchContent` pinned to a specific OpenFX tag — clean and reproducible. |
 | D4 | CNC funding wording | Final approved program name and required attribution form. |
 | D5 | Image sourcing | ✅ Strategy resolved: fair-use reproduction with central attribution in `docs/assets/credits.md`. Per-plugin direct image URLs still to embed in the "Demos & comparisons" sections. |
