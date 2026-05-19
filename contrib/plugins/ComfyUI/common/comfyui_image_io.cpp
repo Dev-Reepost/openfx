@@ -335,6 +335,52 @@ ImageData resize(const ImageData& src, int targetWidth, int targetHeight)
     return dst;
 }
 
+bool isImageCenterEmpty(const ImageData& img, float threshold)
+{
+    if (img.pixels.empty() || img.width <= 0 || img.height <= 0 || img.channels < 1) {
+        return true;
+    }
+
+    // Sample a 16×16 grid in the center half of the image. Borders are skipped
+    // because masks legitimately have black edges even when detection worked —
+    // we want to catch the case where the *content area* is also zero, which
+    // means the model produced nothing.
+    const int gridSize = 16;
+    const int x0 = img.width  / 4;
+    const int x1 = (img.width  * 3) / 4;
+    const int y0 = img.height / 4;
+    const int y1 = (img.height * 3) / 4;
+
+    // If the image is too small to have a meaningful "center half" (e.g. tiny
+    // proxy renders), fall back to sampling the whole image. Otherwise empty
+    // tests on small previews would always trigger.
+    int sx0 = (x1 - x0 > gridSize) ? x0 : 0;
+    int sx1 = (x1 - x0 > gridSize) ? x1 : img.width;
+    int sy0 = (y1 - y0 > gridSize) ? y0 : 0;
+    int sy1 = (y1 - y0 > gridSize) ? y1 : img.height;
+
+    const int chToSum = std::min(3, img.channels);
+    double sum = 0.0;
+    int    samples = 0;
+
+    for (int gy = 0; gy < gridSize; ++gy) {
+        const int y = sy0 + (gy * (sy1 - sy0)) / gridSize;
+        for (int gx = 0; gx < gridSize; ++gx) {
+            const int x = sx0 + (gx * (sx1 - sx0)) / gridSize;
+            const size_t idx = (static_cast<size_t>(y) * img.width + x) * img.channels;
+            if (idx + chToSum > img.pixels.size()) continue;
+            for (int c = 0; c < chToSum; ++c) {
+                sum += std::abs(img.pixels[idx + c]);
+            }
+            samples += chToSum;
+        }
+    }
+
+    if (samples == 0) return true;
+    const double mean = sum / samples;
+    return mean < static_cast<double>(threshold);
+}
+
 ImageData fromOFXBuffer(
     const void* srcPixels,
     int width,

@@ -119,6 +119,30 @@ void toOFXBuffer(
 ImageData resize(const ImageData& src, int targetWidth, int targetHeight);
 
 /**
+ * @brief Detect whether an image is effectively empty (all RGB ≈ 0).
+ *
+ * Samples a coarse grid in the center region of the image (avoiding the
+ * outer 25% on each side where mask/matte content is often legitimately
+ * zero even when detection succeeded). Returns true if the mean of the
+ * absolute RGB values across those samples is below `threshold`.
+ *
+ * Used to surface the failure mode "ComfyUI ran successfully but produced
+ * an empty mask" — typical for SAM-family plugins when the input
+ * resolution is too small for the open-vocabulary detector to find the
+ * prompted subject. Without this signal the plugin shows pure black to
+ * the user and they have no way to tell the model is at fault rather
+ * than the plugin.
+ *
+ * @param img Image to test
+ * @param threshold Mean absolute RGB value below which the image is
+ *                  considered empty. Default 1e-4 is tight enough to
+ *                  ignore float noise but loose enough to forgive a
+ *                  single non-zero pixel in an otherwise empty mask.
+ * @return true if the center region of the image is effectively all-zero.
+ */
+bool isImageCenterEmpty(const ImageData& img, float threshold = 1e-4f);
+
+/**
  * @brief Compute target dimensions to resize an image so its shorter side equals targetShortSide,
  *        preserving aspect ratio.
  *

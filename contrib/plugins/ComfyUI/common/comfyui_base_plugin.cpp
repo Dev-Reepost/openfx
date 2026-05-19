@@ -3163,6 +3163,27 @@ void BasePlugin::loadCachedResult(const OFX::RenderArguments &args, const std::s
     // Read cached output EXR file
     ImageData outputImageData = ImageIO::readEXR(cachedPath);
 
+    // Surface "model produced empty output" to the user. ComfyUI considers a
+    // run successful even when the inference produced an all-zero mask (e.g.
+    // SAM-family open-vocabulary detectors return zero objects when the input
+    // resolution is too small for the prompted subject — typical when the
+    // host timeline is at proxy res). Without this signal the plugin shows
+    // pure black with no explanation and the user can't tell whether the
+    // plugin is broken or the model just found nothing.
+    if (ImageIO::isImageCenterEmpty(outputImageData)) {
+        if (_logger) {
+            _logger->warn("Frame {}: Output EXR loaded successfully but center region is empty "
+                          "(mean RGB approximately 0). ComfyUI ran without errors but the model "
+                          "returned no content. Common causes: (a) SAM/matte prompt did not match "
+                          "anything at the current input resolution — try raising the timeline "
+                          "resolution or revising the prompt; (b) detection threshold is too high; "
+                          "(c) the subject is out of frame. EXR path: {}",
+                          frame, cachedPath);
+        }
+        try { if (_jobStatus)      _jobStatus->setValue("Empty output - model found nothing"); } catch (...) {}
+        try { if (_jobStatusColor) _jobStatusColor->setValue(1.0, 0.5, 0.0); } catch (...) {}  // orange warning
+    }
+
     // Cache output dimensions for dynamic RoD (allows canvas to resize to match output)
     {
         std::lock_guard<std::mutex> lock(_cacheMutex);
