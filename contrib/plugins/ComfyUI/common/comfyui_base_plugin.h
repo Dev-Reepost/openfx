@@ -174,6 +174,13 @@ protected:
     std::string constructInputPath(int frame, const std::string& suffix = "");  // Construct path to input EXR file
     virtual std::string getEffectiveBasename();  // Get basename (auto-generated or manual) - virtual to allow custom naming schemes
 
+    // Read a path-component string param (project/workflow/version/mount paths) and
+    // strip surrounding whitespace + control chars. Without this, a pasted value with
+    // a trailing newline silently corrupts every constructed path; on macOS the folder
+    // gets created with the newline in its name, but the SMB-mounted Windows side
+    // rejects it and ComfyUI fails with "Path not found".
+    std::string getTrimmedStringParam(OFX::StringParam* param) const;
+
     // Multi-input support
     // Writes all connected input clips to EXR files, returns map of input ID -> path
     // InputA = Source (primary), InputB = Source2, InputC = Source3

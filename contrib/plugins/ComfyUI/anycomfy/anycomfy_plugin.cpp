@@ -289,10 +289,10 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::map<std::string, std::s
     // This ensures the plugin works with BOTH templated and raw ComfyUI workflows
     // CRITICAL: This must happen AFTER UI→API conversion because it expects API format
     std::string mountPath, project, workflowName, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflowName = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     std::string basename = getEffectiveBasename();
     std::ostringstream outputPrefix;
@@ -326,7 +326,7 @@ std::string AnyComfyPlugin::getWorkflowsPath() const
     if (comfyInputDir.empty()) {
         // Fallback to shared mount path if input dir not configured
         std::string sharedMount;
-        _macMountPath->getValue(sharedMount);
+        sharedMount = getTrimmedStringParam(_macMountPath);
         return (fs::path(sharedMount) / "workflows").string();
     }
 
@@ -409,10 +409,10 @@ std::string AnyComfyPlugin::getEffectiveBasename()
     // This avoids: "testinputs_AnyComfy_1769610105_AnyComfy" → "testinputs_AnyComfy_1769610105"
 
     std::string project;
-    _projectName->getValue(project);
+    project = getTrimmedStringParam(_projectName);
 
     std::string workflow;
-    _workflowName->getValue(workflow);
+    workflow = getTrimmedStringParam(_workflowName);
 
     // Sanitize workflow name: replace non-alphanumeric characters with underscores
     std::string sanitizedWorkflow = workflow;
@@ -837,8 +837,8 @@ json AnyComfyPlugin::injectPathsIntoWorkflow(const json& workflow, int frame,
 
     // Get mount path info for path conversion
     std::string clientMount, serverMount;
-    _macMountPath->getValue(clientMount);
-    _winMountPath->getValue(serverMount);
+    clientMount = getTrimmedStringParam(_macMountPath);
+    serverMount = getTrimmedStringParam(_winMountPath);
 
     // Helper lambda to convert paths to ComfyUI format (Windows paths)
     auto convertPath = [&](const std::string& path) -> std::string {

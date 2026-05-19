@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstring>
 #include <filesystem>
+#include <algorithm>
 
 #ifdef _WIN32
     #include <sys/stat.h>
@@ -468,7 +469,7 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     // Initialize project status indicator color based on initial project name state
     if (_projectName) {
         std::string projectName;
-        _projectName->getValue(projectName);
+        projectName = getTrimmedStringParam(_projectName);
 
         if (_logger) _logger->info("Initializing project status indicator. Project name is: '{}'", projectName);
 
@@ -524,7 +525,7 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
     // Update project status indicator color based on whether project is set
     if (paramName == "projectName") {
         std::string projectName;
-        _projectName->getValue(projectName);
+        projectName = getTrimmedStringParam(_projectName);
 
         // Get the color indicator parameter
         OFX::RGBParam *indicatorParam = fetchRGBParam("projectNameIndicator");
@@ -589,8 +590,8 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
 
         try {
             std::string project, mountPath;
-            _projectName->getValue(project);
-            _macMountPath->getValue(mountPath);
+            project = getTrimmedStringParam(_projectName);
+            mountPath = getTrimmedStringParam(_macMountPath);
 
             if (project.empty()) {
                 if (_logger) { _logger->warn("  ABORT: project name is empty"); _logger->flush(); }
@@ -702,10 +703,10 @@ void BasePlugin::executePendingCollect()
 
         std::string mountPath, project, workflowName, version, serverAddress;
         int serverPort = 0;
-        _macMountPath->getValue(mountPath);
-        _projectName->getValue(project);
-        _workflowName->getValue(workflowName);
-        _outputVersion->getValue(version);
+        mountPath = getTrimmedStringParam(_macMountPath);
+        project = getTrimmedStringParam(_projectName);
+        workflowName = getTrimmedStringParam(_workflowName);
+        version = getTrimmedStringParam(_outputVersion);
         _serverAddress->getValue(serverAddress);
         serverPort = _serverPort->getValue();
 
@@ -1144,11 +1145,11 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     std::string address, mountPath, serverMount, project, workflowName, version;
     _serverAddress->getValue(address);
     int port = _serverPort->getValue();
-    _macMountPath->getValue(mountPath);
-    _winMountPath->getValue(serverMount);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    serverMount = getTrimmedStringParam(_winMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflowName = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     // Get auto-generated basename
     std::string basename = getEffectiveBasename();
@@ -1570,10 +1571,10 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::s
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     // Get effective basename (auto-generated or manual)
     std::string basename = getEffectiveBasename();
@@ -1673,10 +1674,10 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     // Get auto-generated basename
     std::string basename = getEffectiveBasename();
@@ -1815,6 +1816,34 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
     return "";
 }
 
+std::string BasePlugin::getTrimmedStringParam(OFX::StringParam* param) const
+{
+    // Path-component string params (project/workflow/version/mount paths) are spliced
+    // into filesystem paths. A pasted value can carry trailing whitespace or a newline,
+    // which silently produces a path like ".../v004\n\006_OFX_TEST" that mac creates
+    // happily but the SMB-mounted Windows side rejects with "Path not found".
+    // Strip leading/trailing whitespace and any embedded control characters.
+    std::string value;
+    if (!param) return value;
+    param->getValue(value);
+
+    auto isWhitespaceOrCtrl = [](unsigned char c) {
+        return c <= 0x20 || c == 0x7f;
+    };
+
+    size_t start = 0;
+    while (start < value.size() && isWhitespaceOrCtrl(static_cast<unsigned char>(value[start]))) ++start;
+    size_t end = value.size();
+    while (end > start && isWhitespaceOrCtrl(static_cast<unsigned char>(value[end - 1]))) --end;
+    std::string trimmed = value.substr(start, end - start);
+
+    // Also defend against embedded control characters (e.g., a stray \r in the middle).
+    trimmed.erase(std::remove_if(trimmed.begin(), trimmed.end(),
+                                 [](unsigned char c) { return c < 0x20 || c == 0x7f; }),
+                  trimmed.end());
+    return trimmed;
+}
+
 std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
 {
     // Convert client-side path to server-side path
@@ -1824,8 +1853,8 @@ std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
 
     // Get mount paths
     std::string clientMount, serverMount;
-    _macMountPath->getValue(clientMount);
-    _winMountPath->getValue(serverMount);
+    clientMount = getTrimmedStringParam(_macMountPath);
+    serverMount = getTrimmedStringParam(_winMountPath);
 
     if (_logger) {
         _logger->info("  Client mount: {}", clientMount);
@@ -1865,10 +1894,10 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
     // Example: /Volumes/silo2/002_COMFYUI/out/TEST_SAM/segmentation/v001/shot01.0056.exr
 
     std::string mountPath, project, workflow, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     // Get effective basename (auto-generated or manual)
     std::string basename = getEffectiveBasename();
@@ -1894,10 +1923,10 @@ std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
     // With suffix: /Volumes/silo2/002_COMFYUI/in/projects/TEST_SAM/segmentation/v001/shot01_B.0056.exr
 
     std::string mountPath, project, workflow, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     // Get effective basename (auto-generated or manual)
     std::string basename = getEffectiveBasename();
@@ -1919,10 +1948,10 @@ std::string BasePlugin::constructInputFolderPath() const
     // Returns the folder that holds the full EXR sequence for sequence-mode plugins.
     // Pattern: {macMountPath}/in/projects/{project}/{workflow}/{version}/{basename}/
     std::string mountPath, project, workflow, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
     std::string basename = const_cast<BasePlugin*>(this)->getEffectiveBasename();
 
     std::ostringstream folder;
@@ -2061,7 +2090,7 @@ std::string BasePlugin::getEffectiveBasename()
     //   Example: TEST_JULIEN_AnyComfy
 
     std::string project;
-    _projectName->getValue(project);
+    project = getTrimmedStringParam(_projectName);
 
     // Check if this plugin type wants workflow in basename (generic plugins like AnyComfy)
     bool useWorkflow = includeWorkflowInBasename();
@@ -2069,7 +2098,7 @@ std::string BasePlugin::getEffectiveBasename()
 
     if (useWorkflow) {
         std::string workflow;
-        _workflowName->getValue(workflow);
+        workflow = getTrimmedStringParam(_workflowName);
 
         // Sanitize workflow name: replace non-alphanumeric characters with underscores
         sanitizedWorkflow = workflow;
@@ -2320,10 +2349,10 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
 
     // Get parameters for replacements
     std::string mountPath, project, workflowName, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflowName = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     std::string basename = getEffectiveBasename();
 
@@ -2452,7 +2481,7 @@ void BasePlugin::renderBlocking(const OFX::RenderArguments &args)
 
     // Validate required parameters
     std::string projectName;
-    _projectName->getValue(projectName);
+    projectName = getTrimmedStringParam(_projectName);
 
     if (projectName.empty()) {
         std::string warningMsg = "Project Name is required but not set. Please set the Project Name parameter in the plugin settings.";
@@ -2478,10 +2507,10 @@ void BasePlugin::renderBlocking(const OFX::RenderArguments &args)
 
     // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
     std::string mountPath, workflowName, version, serverMount;
-    _macMountPath->getValue(mountPath);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
-    _winMountPath->getValue(serverMount);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    workflowName = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
+    serverMount = getTrimmedStringParam(_winMountPath);
 
     if (_logger) {
         _logger->info("========================================");
@@ -2724,10 +2753,10 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
 
         // 2a. Active job guard — build the output prefix key for this configuration
         std::string mountPath, project, workflowName, version;
-        _macMountPath->getValue(mountPath);
-        _projectName->getValue(project);
-        _workflowName->getValue(workflowName);
-        _outputVersion->getValue(version);
+        mountPath = getTrimmedStringParam(_macMountPath);
+        project = getTrimmedStringParam(_projectName);
+        workflowName = getTrimmedStringParam(_workflowName);
+        version = getTrimmedStringParam(_outputVersion);
         std::string outputPrefix = mountPath + "/out/" + project + "/" + workflowName + "/" + version + "/" + getEffectiveBasename();
 
         if (_pendingSequenceOutputPrefix == outputPrefix) {
@@ -2775,7 +2804,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
     try {
         // Validate project name
         std::string projectName;
-        _projectName->getValue(projectName);
+        projectName = getTrimmedStringParam(_projectName);
 
         if (projectName.empty()) {
             if (_logger) _logger->warn("Frame {}: Project name empty, returning passthrough", frame);
@@ -2785,9 +2814,9 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
 
         // Get mount path info for directory creation
         std::string mountPath, workflowName, version;
-        _macMountPath->getValue(mountPath);
-        _workflowName->getValue(workflowName);
-        _outputVersion->getValue(version);
+        mountPath = getTrimmedStringParam(_macMountPath);
+        workflowName = getTrimmedStringParam(_workflowName);
+        version = getTrimmedStringParam(_outputVersion);
 
         // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
         // This MUST happen before async submission to ensure directories exist

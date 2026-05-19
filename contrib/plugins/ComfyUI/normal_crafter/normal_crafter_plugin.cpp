@@ -110,10 +110,10 @@ json NormalCrafterPlugin::buildHardcodedWorkflow(int frame, const std::string& i
     int effectiveWindowSize = (imageLoadCap > 0) ? std::min(windowSize, imageLoadCap) : windowSize;
 
     std::string mountPath, project, workflow_name, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflow_name);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflow_name = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     std::string basename = getEffectiveBasename();
 

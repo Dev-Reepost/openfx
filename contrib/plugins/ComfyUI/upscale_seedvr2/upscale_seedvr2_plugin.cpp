@@ -176,10 +176,10 @@ json UpscaleSeedVR2Plugin::buildHardcodedWorkflow(int frame, const std::string& 
     std::string attentionMode   = getAttentionModeName();
 
     std::string mountPath, project, workflowName, version;
-    _macMountPath->getValue(mountPath);
-    _projectName->getValue(project);
-    _workflowName->getValue(workflowName);
-    _outputVersion->getValue(version);
+    mountPath = getTrimmedStringParam(_macMountPath);
+    project = getTrimmedStringParam(_projectName);
+    workflowName = getTrimmedStringParam(_workflowName);
+    version = getTrimmedStringParam(_outputVersion);
 
     std::string basename = getEffectiveBasename();
 
