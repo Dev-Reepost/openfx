@@ -81,12 +81,17 @@ find_package(spdlog REQUIRED)
 
 # ComfyUI plugin dependencies (optional)
 if(BUILD_COMFYUI_PLUGINS)
-  find_package(OpenSSL REQUIRED)
-  find_package(nlohmann_json REQUIRED)
-  find_package(httplib REQUIRED)
-  find_package(ixwebsocket REQUIRED)
-  find_package(tinyexr REQUIRED)
-  find_package(miniz REQUIRED)
+  # CONFIG-only resolution. CMake's built-in FindOpenSSL.cmake probes Homebrew's
+  # keg on Apple Silicon and bakes /opt/homebrew/... paths into LC_LOAD_DYLIB,
+  # which makes bundles non-portable. Restricting to CONFIG mode forces
+  # find_package() to consume Conan's OpenSSLConfig.cmake from CMAKE_PREFIX_PATH
+  # (Conan provides static libssl/libcrypto, which is what we want).
+  find_package(OpenSSL CONFIG REQUIRED)
+  find_package(nlohmann_json CONFIG REQUIRED)
+  find_package(httplib CONFIG REQUIRED)
+  find_package(ixwebsocket CONFIG REQUIRED)
+  find_package(tinyexr CONFIG REQUIRED)
+  find_package(miniz CONFIG REQUIRED)
 endif()
 
 # Macros

@@ -263,6 +263,16 @@ configure_cmake() {
         fi
     fi
 
+    # Mark the start of this build. find_plugin_binary uses this marker's mtime
+    # as a freshness gate: any .ofx older than this is from a previous build
+    # (possibly with a different target name) and must be ignored. Without
+    # this gate, a target rename leaves a stale binary in the plugin dir that
+    # the script happily picks up and "installs", with hours of confused
+    # debugging when its load paths don't match today's source tree.
+    BUILD_START_MARKER="$OPENFX_ROOT/build/$BUILD_TYPE/.build-start"
+    mkdir -p "$(dirname "$BUILD_START_MARKER")"
+    : > "$BUILD_START_MARKER"
+
     # Additional CMake flags. Use an array so values containing spaces stay
     # in a single argument without needing embedded quotes (which CMake would
     # otherwise see as part of the value).
@@ -270,11 +280,32 @@ configure_cmake() {
     if [[ "$is_comfyui_plugin" == true ]]; then
         cmake_flags+=(-DBUILD_COMFYUI_PLUGINS=ON)
     fi
-    if [[ -n "$INSTALL_DIR" ]]; then
-        cmake_flags+=("-DPLUGIN_INSTALLDIR=$INSTALL_DIR")
-    fi
 
-    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" "${cmake_flags[@]}"
+    # Always set PLUGIN_INSTALLDIR. cmake/OpenFX.cmake's add_ofx_plugin() writes
+    # Info.plist directly into ${PLUGIN_INSTALLDIR}/<Target>.ofx.bundle/Contents
+    # at *configure* time (via configure_file), so this path MUST be writable
+    # by the current user. Its built-in default is /Library/OFX/Plugins/...
+    # which is system-owned and typically read-only without sudo. Defaulting to
+    # the user's OFX library guarantees the configure step succeeds; the
+    # install_plugin step below still copies the final bundle to the requested
+    # destination if --install-dir was used.
+    local effective_installdir="${INSTALL_DIR:-$USER_INSTALL_DIR}"
+    mkdir -p "$effective_installdir"
+    cmake_flags+=("-DPLUGIN_INSTALLDIR=$effective_installdir")
+
+    # Always configure with `cmake --fresh`. CMake caches resolved find_package
+    # paths across runs, so a previous configure that happened to resolve (say)
+    # OpenSSL against Homebrew leaves /opt/homebrew/... pinned in CMakeCache.txt
+    # even after CMakeLists.txt is changed to use CONFIG-only mode. The cached
+    # value silently wins on the next incremental configure, producing a binary
+    # that loads only on the build machine. Pattern-matching the cache to detect
+    # this is fragile — different packages cache under different variable names,
+    # and new package managers (Nix, pkgsrc) slip through any denylist. The
+    # reliable answer is to always start from scratch: configure on this project
+    # is ~5–10 seconds with Conan's generators warmed, and object files survive
+    # so incremental compilation is unaffected. Cheaper than any class of
+    # "wrong library got picked" debugging.
+    cmake --preset "conan-$(echo "${build_type_arg}" | tr '[:upper:]' '[:lower:]')" --fresh "${cmake_flags[@]}"
     log_success "CMake configuration completed"
 }
 
@@ -299,69 +330,84 @@ build_plugin() {
     fi
 }
 
-# Find built plugin binary
+# Find the plugin binary that *this* build produced. Critical: a previous
+# build with a different target name may have left a stale .ofx in the same
+# plugin dir. Without a target-existence gate this function happily picks the
+# stale one, the portability check runs on it, and the resulting "not portable"
+# error has nothing to do with today's build — confusing everyone.
+#
+# Gate: CMake creates `CMakeFiles/<TargetName>.dir/` for every target during
+# configure. The directory's mtime updates on every reconfigure, even when no
+# relink happens. Comparing against $BUILD_START_MARKER tells us whether the
+# user-requested TARGET_NAME corresponds to a real target in THIS build.
+#
+# Once we've confirmed the target exists, the .ofx file's own mtime is
+# irrelevant — CMake may have legitimately skipped the link step because
+# nothing changed since the last build of the same target.
 find_plugin_binary() {
-    local plugin_binary=""
     local search_base="build/$BUILD_TYPE"
-    
-    # Define possible binary names (including bundle paths)
-    local binary_names=(
-        "$TARGET_NAME.ofx"
-        "${TARGET_NAME%.ofx}.ofx"
-        "$(basename "$PLUGIN_DIR").ofx"
-        "$TARGET_NAME.ofx/Contents/MacOS/$TARGET_NAME"
-        "${TARGET_NAME%.ofx}.ofx/Contents/MacOS/${TARGET_NAME%.ofx}"
-    )
-    
-    # Define possible locations based on the plugin directory structure
-    local search_dirs=(
-        "$PLUGIN_DIR"
-        "$(dirname "$PLUGIN_DIR")/$(basename "$PLUGIN_DIR")"
-        "MyFirstPlugin"
-        "Examples/$(basename "$PLUGIN_DIR")"
-        "Support/Plugins/$(basename "$PLUGIN_DIR")"
-    )
-    
-    # Search for the binary
-    for dir in "${search_dirs[@]}"; do
-        for name in "${binary_names[@]}"; do
-            local candidate="$OPENFX_ROOT/$search_base/$dir/$name"
-            if [[ -f "$candidate" ]]; then
-                plugin_binary="$candidate"
-                break 2
-            fi
-        done
-    done
-    
-    # If not found in specific directories, search more specifically
-    if [[ -z "$plugin_binary" ]]; then
-        log_info "Searching for plugin binary in $PLUGIN_DIR..." >&2
-        # Look specifically in the plugin's build directory first
-        while IFS= read -r -d '' candidate; do
-            if [[ -f "$candidate" ]]; then
-                plugin_binary="$candidate"
-                break
-            fi
-        done < <(find "$OPENFX_ROOT/$search_base/$PLUGIN_DIR" -name "*$TARGET_NAME*" -type f -print0 2>/dev/null)
 
-        # If still not found, look for any executable in the plugin dir
-        if [[ -z "$plugin_binary" ]]; then
-            while IFS= read -r -d '' candidate; do
-                if [[ -f "$candidate" && -x "$candidate" ]]; then
-                    plugin_binary="$candidate"
-                    break
-                fi
-            done < <(find "$OPENFX_ROOT/$search_base/$PLUGIN_DIR" -type f -executable -print0 2>/dev/null)
-        fi
-    fi
-    
-    if [[ -z "$plugin_binary" ]]; then
-        log_error "Built plugin binary not found" >&2
-        log_info "Searched for: ${binary_names[*]}" >&2
-        log_info "In directories under $search_base/: ${search_dirs[*]}" >&2
+    if [[ -z "${BUILD_START_MARKER:-}" || ! -f "$BUILD_START_MARKER" ]]; then
+        log_error "Build start marker missing — configure_cmake must run first." >&2
         exit 1
     fi
-    
+
+    # 1. Validate the requested target was configured by *this* build.
+    local target_subdir="$OPENFX_ROOT/$search_base/$PLUGIN_DIR/CMakeFiles/$TARGET_NAME.dir"
+    if [[ ! -d "$target_subdir" || ! "$target_subdir" -nt "$BUILD_START_MARKER" ]]; then
+        log_error "CMake target '$TARGET_NAME' was not configured by this build." >&2
+
+        # List the targets that *were* configured under PLUGIN_DIR, so the
+        # user can spot a rename or typo. Use the same freshness gate.
+        local fresh_targets
+        fresh_targets=$(find "$OPENFX_ROOT/$search_base/$PLUGIN_DIR/CMakeFiles" \
+            -maxdepth 1 -type d -name "*.dir" -newer "$BUILD_START_MARKER" 2>/dev/null \
+            | sed -E 's|.*/||; s|\.dir$||' \
+            | grep -v '^$' || true)
+
+        if [[ -n "$fresh_targets" ]]; then
+            log_error "" >&2
+            log_error "Targets actually configured under $PLUGIN_DIR in this build:" >&2
+            echo "$fresh_targets" | sed 's|^|        |' >&2
+            log_error "" >&2
+            log_error "Was the CMake target renamed? Re-invoke build-plugin.sh with the name" >&2
+            log_error "from 'add_library(<TargetName> ...)' in $PLUGIN_DIR/CMakeLists.txt." >&2
+        else
+            log_error "" >&2
+            log_error "No targets at all were configured under $PLUGIN_DIR in this build." >&2
+            log_error "Either CMake skipped the directory (check add_subdirectory in parent" >&2
+            log_error "CMakeLists.txt) or the build failed before reaching it." >&2
+        fi
+        exit 1
+    fi
+
+    # 2. Target is real. Locate its .ofx output. Convention in this repo is
+    #    <plugin_dir>/<target>.ofx, but allow a few fallbacks for plugins
+    #    that set OUTPUT_NAME or build bundle structures themselves.
+    local candidate_paths=(
+        "$OPENFX_ROOT/$search_base/$PLUGIN_DIR/$TARGET_NAME.ofx"
+        "$OPENFX_ROOT/$search_base/$PLUGIN_DIR/$TARGET_NAME.ofx/Contents/MacOS/$TARGET_NAME"
+        "$OPENFX_ROOT/$search_base/Examples/$(basename "$PLUGIN_DIR")/$TARGET_NAME.ofx"
+        "$OPENFX_ROOT/$search_base/Support/Plugins/$(basename "$PLUGIN_DIR")/$TARGET_NAME.ofx"
+    )
+    local plugin_binary=""
+    for candidate in "${candidate_paths[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            plugin_binary="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$plugin_binary" ]]; then
+        log_error "Target '$TARGET_NAME' was configured but no .ofx binary was found." >&2
+        log_error "Looked for:" >&2
+        for p in "${candidate_paths[@]}"; do
+            log_error "  $p" >&2
+        done
+        log_error "The build may have failed silently for this target. Re-run with -v." >&2
+        exit 1
+    fi
+
     log_info "Found plugin binary: $plugin_binary" >&2
     echo "$plugin_binary"
 }
@@ -406,6 +452,202 @@ locate_or_create_bundle() {
     log_success "Bundle created: $bundle_path" >&2
     { file "$(find "$bundle_path" -name "*.ofx" -type f | head -1)"; } >&2
     echo "$bundle_path"
+}
+
+# Verify the built plugin binary will load on a clean target machine — not
+# just the developer box that built it. Each platform has a different failure
+# mode, but the symptom is the same: OFX hosts silently report the plugin as
+# "not supported on this platform" and skip it, leaving the developer to guess
+# why their bundle doesn't appear.
+#
+# Allowlist (not denylist): we explicitly enumerate what's portable and reject
+# everything else. A denylist of known package-manager prefixes leaks the next
+# time someone installs Nix, pkgsrc, Linuxbrew, or a custom /opt prefix.
+#
+# We fail hard rather than warn — silently shipping a non-portable bundle is
+# exactly the regression this check exists to prevent.
+verify_binary_portability() {
+    local bundle_path="$1"
+    case "$PLATFORM" in
+        macos)   _verify_portability_macos   "$bundle_path" ;;
+        linux)   _verify_portability_linux   "$bundle_path" ;;
+        windows) _verify_portability_windows "$bundle_path" ;;
+        *)       log_warning "No portability check for platform: $PLATFORM" ;;
+    esac
+}
+
+# macOS: LC_LOAD_DYLIB entries record absolute paths at link time. Anything
+# outside the system framework dirs or @-token-relative references makes the
+# bundle load only on the build machine. Probe with `otool -L`.
+_verify_portability_macos() {
+    local bundle_path="$1"
+
+    if ! command -v otool &>/dev/null; then
+        log_warning "otool not found; skipping macOS portability check."
+        return
+    fi
+
+    local plugin_binary
+    plugin_binary=$(find "$bundle_path/Contents/MacOS" -maxdepth 1 -type f -name "*.ofx" 2>/dev/null | head -1)
+    if [[ -z "$plugin_binary" ]]; then
+        log_warning "No .ofx binary found in $bundle_path/Contents/MacOS; skipping portability check."
+        return
+    fi
+
+    log_info "Verifying binary portability (macOS): $plugin_binary"
+
+    # Allowlist of portable load-path prefixes:
+    # - /System/Library/ and /usr/lib/ are present on every macOS install.
+    # - @rpath / @loader_path / @executable_path are resolved at load time
+    #   relative to the binary's own location, so they ship with the bundle.
+    local allowed='^(/System/Library/|/usr/lib/|@rpath|@loader_path|@executable_path)'
+
+    local bad_refs
+    bad_refs=$(otool -L "$plugin_binary" 2>/dev/null \
+        | tail -n +2 \
+        | awk '{print $1}' \
+        | grep -vE "$allowed" || true)
+
+    if [[ -n "$bad_refs" ]]; then
+        log_error "Binary has non-portable load paths in LC_LOAD_DYLIB:"
+        echo "$bad_refs" | sed 's/^/        /'
+        log_error ""
+        log_error "Allowed prefixes: /System/Library/, /usr/lib/, @rpath, @loader_path, @executable_path"
+        log_error "Anything else (Homebrew, MacPorts, Nix, build-host home dirs) means the bundle"
+        log_error "loads only on the build machine; hosts will silently skip it as 'unsupported'."
+        log_error ""
+        log_error "Fix: make sure CMake resolved each dependency through Conan's *Config.cmake."
+        log_error "build-plugin.sh now always configures with --fresh so cache poisoning can't"
+        log_error "carry over a stale Homebrew resolution; verify the top-level CMakeLists uses"
+        log_error "'find_package(... CONFIG REQUIRED)' for every Conan-supplied dep."
+        exit 1
+    fi
+
+    log_success "Binary portability check passed (macOS)"
+}
+
+# Linux: PE-style absolute paths don't appear in ELF NEEDED entries — those
+# are bare sonames (libc.so.6) resolved by the runtime linker. The real
+# portability hazard is DT_RPATH / DT_RUNPATH pointing at build-host paths
+# (/home/user/..., /opt/conan-cache/...). Allowlist: empty rpath or pure
+# $ORIGIN-relative. Probe with `readelf -d`.
+_verify_portability_linux() {
+    local bundle_path="$1"
+
+    if ! command -v readelf &>/dev/null; then
+        log_warning "readelf not found; skipping Linux portability check."
+        return
+    fi
+
+    local plugin_binary
+    plugin_binary=$(find "$bundle_path" -type f -name "*.ofx" 2>/dev/null | head -1)
+    if [[ -z "$plugin_binary" ]]; then
+        log_warning "No .ofx binary found under $bundle_path; skipping portability check."
+        return
+    fi
+
+    log_info "Verifying binary portability (Linux): $plugin_binary"
+
+    # Pull RPATH/RUNPATH entries (one or both may be set). readelf prints them
+    # as `(RPATH) Library rpath: [/path/one:/path/two]` — extract the bracketed
+    # colon-separated list.
+    local rpaths
+    rpaths=$(readelf -d "$plugin_binary" 2>/dev/null \
+        | grep -E '\((RPATH|RUNPATH)\)' \
+        | sed -E 's/.*\[(.*)\].*/\1/' || true)
+
+    if [[ -n "$rpaths" ]]; then
+        # Allowlist: each colon-separated entry must be $ORIGIN or $ORIGIN/...
+        local bad_rpath
+        bad_rpath=$(echo "$rpaths" | tr ':' '\n' | grep -vE '^\$ORIGIN(/|$)' | grep -v '^$' || true)
+        if [[ -n "$bad_rpath" ]]; then
+            log_error "Binary has non-portable RPATH/RUNPATH entries:"
+            echo "$bad_rpath" | sed 's/^/        /'
+            log_error ""
+            log_error "Allowed: empty, or \$ORIGIN-relative (e.g., \$ORIGIN, \$ORIGIN/../lib)."
+            log_error "Absolute paths to /home, /opt, /usr/local, Conan cache dirs, etc. make the"
+            log_error "bundle load only on the build machine."
+            log_error ""
+            log_error "Fix: set CMAKE_INSTALL_RPATH='\$ORIGIN' (and CMAKE_BUILD_WITH_INSTALL_RPATH=ON)"
+            log_error "in CMakeLists.txt, or prefer static linkage for Conan-supplied deps."
+            exit 1
+        fi
+    fi
+
+    # Also reject any NEEDED entry that is an absolute path (rare but possible
+    # if a library was linked by full path rather than -l<name>).
+    local bad_needed
+    bad_needed=$(readelf -d "$plugin_binary" 2>/dev/null \
+        | grep -E '\(NEEDED\)' \
+        | sed -E 's/.*\[(.*)\].*/\1/' \
+        | grep '^/' || true)
+    if [[ -n "$bad_needed" ]]; then
+        log_error "Binary has NEEDED entries with absolute paths (not bare sonames):"
+        echo "$bad_needed" | sed 's/^/        /'
+        exit 1
+    fi
+
+    log_success "Binary portability check passed (Linux)"
+}
+
+# Windows: PE files don't embed absolute paths to dependencies — imports are
+# bare DLL names resolved by the loader's search order. The hazard is
+# depending on compiler-runtime DLLs (MinGW/MSYS2's libgcc_s, libstdc++,
+# libwinpthread) that aren't on a stock Windows install. Either link those
+# statically or bundle the DLLs alongside the .ofx. Probe with `objdump -p`
+# (MSYS2/MinGW) or `dumpbin /dependents` (MSVC); skip the check if neither
+# is available, since requiring a specific toolchain just to validate would
+# break developers on the other toolchain.
+_verify_portability_windows() {
+    local bundle_path="$1"
+
+    local plugin_binary
+    plugin_binary=$(find "$bundle_path" -type f -name "*.ofx" 2>/dev/null | head -1)
+    if [[ -z "$plugin_binary" ]]; then
+        log_warning "No .ofx binary found under $bundle_path; skipping portability check."
+        return
+    fi
+
+    local tool=""
+    local imports=""
+    if command -v dumpbin &>/dev/null; then
+        tool="dumpbin"
+        imports=$(dumpbin /dependents "$plugin_binary" 2>/dev/null \
+            | awk 'tolower($1) ~ /\.dll$/ {print $1}')
+    elif command -v objdump &>/dev/null; then
+        tool="objdump"
+        imports=$(objdump -p "$plugin_binary" 2>/dev/null \
+            | grep -E '^[[:space:]]*DLL Name:' \
+            | awk '{print $3}')
+    else
+        log_warning "Neither dumpbin nor objdump found; skipping Windows portability check."
+        return
+    fi
+
+    log_info "Verifying binary portability (Windows, via $tool): $plugin_binary"
+
+    # Reject DLLs that the MSYS2/MinGW toolchain emits as dynamic runtime
+    # dependencies; these are typically absent on a clean Windows install.
+    # If you genuinely need one of these, ship it inside the bundle's
+    # Win64-x86_64/ directory and remove its prefix from this list.
+    local forbidden_dlls
+    forbidden_dlls=$(echo "$imports" \
+        | grep -iE '^(libgcc|libstdc\+\+|libwinpthread|libssp|libgomp|libquadmath)' || true)
+
+    if [[ -n "$forbidden_dlls" ]]; then
+        log_error "Binary depends on compiler-runtime DLLs not present on stock Windows:"
+        echo "$forbidden_dlls" | sed 's/^/        /'
+        log_error ""
+        log_error "These ship only with MSYS2/MinGW. On a target machine without that toolchain"
+        log_error "the host will fail to load the plugin and report it as 'unsupported'."
+        log_error ""
+        log_error "Fix (preferred): link statically — add -static-libgcc -static-libstdc++ to"
+        log_error "the target's link flags, or use the static MSVCRT runtime. Alternative: copy"
+        log_error "the required DLLs into the bundle's Win64-x86_64/ directory."
+        exit 1
+    fi
+
+    log_success "Binary portability check passed (Windows)"
 }
 
 # Install the bundle to the target directory
@@ -487,6 +729,7 @@ main() {
 
     plugin_binary=$(find_plugin_binary)
     bundle_path=$(locate_or_create_bundle "$plugin_binary")
+    verify_binary_portability "$bundle_path"
     install_plugin "$bundle_path"
     verify_installation
     print_summary "$bundle_path"
