@@ -34,11 +34,17 @@ git checkout -b main
 
 ### 2. Copy staged content
 
+The source repo is the `Dev-Reepost/openfx` fork on branch
+`feature/comfyui-plugins` (not `main` — `main` mirrors upstream OFX).
+Check out that branch first so the working tree has the right contents:
+
 ```bash
-SRC=/path/to/openfx/contrib/release-staging
-cp -R "$SRC"/{README.md,LICENSE,CITATION.cff,CHANGELOG.md,CONTRIBUTING.md,_config.yml} .
-cp -R "$SRC/docs" .
-cp -R "$SRC/RELEASE_SPEC.md" .   # optional — keep as internal reference
+SRC=/path/to/openfx
+( cd "$SRC" && git checkout feature/comfyui-plugins )
+
+cp -R "$SRC/contrib/release-staging"/{README.md,LICENSE,CITATION.cff,CHANGELOG.md,CONTRIBUTING.md,_config.yml,.github} .
+cp -R "$SRC/contrib/release-staging/docs" .
+cp -R "$SRC/contrib/release-staging/RELEASE_SPEC.md" .   # optional — keep as internal reference
 ```
 
 The `_research/` folder is staging-only and **does not** get copied.
