@@ -337,6 +337,7 @@ the troubleshooting "host quirks" appendix.
 | D6 | Citation format | ✅ Resolved: `CITATION.cff` v1.2.0 at the repo root + per-plugin BibTeX in the docs. |
 | D7 | Issue templates | ✅ Resolved: bug + feature templates in `.github/ISSUE_TEMPLATE/`. |
 | D8 | Code of Conduct | Contributor Covenant v2.1 unless the team has a preferred alternative. |
+| D9 | Repo positioning vs. existing openfx fork | ✅ Resolved: **Option A** — `Dev-Reepost/aifx` is a new repo, materialized from this staging tree with a fresh root commit. The existing `Dev-Reepost/openfx` fork is archived once aifx is verified live, with a README banner redirecting users to aifx. OpenFX upstream is consumed via FetchContent (D3) rather than carried in tree. The fork stays browsable for historical context and any future patches contributed back to `AcademySoftwareFoundation/openfx`. |
 
 ## 12. Migration playbook
 

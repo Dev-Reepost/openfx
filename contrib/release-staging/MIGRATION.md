@@ -154,15 +154,28 @@ In Releases, attach prebuilt `.ofx.bundle` archives once CI produces them.
 Update `CHANGELOG.md` with the released version. Move the `[Unreleased]`
 heading content to `[1.0.0] — YYYY-MM-DD`.
 
-## Post-migration cleanup in the upstream fork
+## Post-migration cleanup: archive the openfx fork
 
-After the new public repo is live:
+The `Dev-Reepost/openfx` fork was the development tree where AIFX was built.
+Once `Dev-Reepost/aifx` is live and verified, the fork stops being the
+source of truth for plugin work. Two things happen:
 
-- The `contrib/plugins/ComfyUI/`, `contrib/release-staging/`, `contrib/docs/`
-  folders in the upstream fork can be left in place as historical record, or
-  removed once the new repo is the canonical location.
-- Update the upstream fork's `CLAUDE.md` and `README.md` to point users at
-  the new repo.
+1. **Update the fork's `README.md`** to a short banner at the top:
+
+   > **This fork is no longer the home of AIFX.** Active development has
+   > moved to [Dev-Reepost/aifx](https://github.com/Dev-Reepost/aifx).
+   > This fork remains for historical context and any future contributions
+   > back to [AcademySoftwareFoundation/openfx](https://github.com/AcademySoftwareFoundation/openfx).
+
+2. **Archive the fork** (Settings → General → Archive this repository).
+   Once archived, the fork becomes read-only and visually flagged as such.
+   It stays accessible for git history and reference, but cannot accept new
+   commits or issues. If you later need to contribute a patch back to
+   upstream OpenFX, you can un-archive temporarily.
+
+The fork's commit history (including all of AIFX's development) remains
+intact and browsable. The new `aifx` repo starts at a fresh root commit
+by design — it carries the *result* of the work, not the development log.
 
 ## Open issues to address before V1.0.0
 
