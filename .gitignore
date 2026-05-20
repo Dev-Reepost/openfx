@@ -59,3 +59,6 @@ xizvuaie.fcz.txt
 # Documentation working files
 contrib/docs/timesheets/
 contrib/docs/progress/
+
+# Local working notes — gitignored on purpose, see NOTES.md at repo root.
+NOTES.md
