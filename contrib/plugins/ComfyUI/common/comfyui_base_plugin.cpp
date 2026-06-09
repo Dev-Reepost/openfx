@@ -542,11 +542,17 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
         }
     }
 
-    // Invalidate RoD cache when parameters affecting output path change
-    // This ensures canvas resizes correctly when switching between instances
+    // Invalidate RoD cache when parameters affecting output path or output
+    // dimensions change.
+    //   - Path-affecting params (project/workflow/version/mount) move the
+    //     cached file to a different on-disk location.
+    //   - Dimension-affecting params (e.g. SeedVR2 'resolution',
+    //     'maxResolution') keep the path the same but invalidate the cached
+    //     width/height — the next render will produce different sized output.
     if (paramName == "projectName" || paramName == "workflowName" ||
         paramName == "outputVersion" || paramName == "workflowFilePath" ||
-        paramName == "macMountPath"  || paramName == "winMountPath") {
+        paramName == "macMountPath"  || paramName == "winMountPath" ||
+        paramName == "resolution"    || paramName == "maxResolution") {
         std::lock_guard<std::mutex> lock(_cacheMutex);
         if (!_cacheDimensions.empty() || !_cacheFileExists.empty()) {
             if (_logger) {
@@ -697,8 +703,16 @@ void BasePlugin::executePendingCollect()
             _jobManager->setCompletionCallback([this](int f, bool ok){ onJobComplete(f, ok); });
             _jobManager->setStatusUpdateCallback([this](){ updateJobStatusDisplay(); });
             _jobManager->setAdaptivePollingIntervals(0.5, 5.0);
-            _jobManager->setMaxPollAttempts(300);
+            // Wall-clock cap covers the user-visible "Timeout (s)" param —
+            // keep the poll-count cap as a final runaway-loop guard (well
+            // above 1h at the fast 0.5s cadence).
+            _jobManager->setMaxPollAttempts(7200);
             _jobManager->setJobRetentionTime(300);
+        }
+        // Apply the live timeout value at every submit so user param changes
+        // take effect without recreating the AsyncJobManager.
+        if (_jobManager && _timeout) {
+            _jobManager->setMaxJobDurationSec(_timeout->getValue());
         }
 
         std::string mountPath, project, workflowName, version, serverAddress;
@@ -1090,15 +1104,35 @@ bool BasePlugin::getRegionOfDefinition(const OFX::RegionOfDefinitionArguments &a
         }
     }
 
-    // No output yet - use source RoD as default
+    // No output yet - use source RoD as default, with optional predicted
+    // scale applied so resolution-changing plugins (e.g. SeedVR2 upscaler)
+    // can report the correct downstream canvas size before any frame has
+    // been rendered to disk.
     if (_srcClip && _srcClip->isConnected()) {
         rod = _srcClip->getRegionOfDefinition(args.time);
 
+        OfxPointD scale = getPredictedOutputScale(args.time);
+        const bool scaled = (scale.x != 1.0 || scale.y != 1.0)
+                            && scale.x > 0.0 && scale.y > 0.0;
+        if (scaled) {
+            const double w = rod.x2 - rod.x1;
+            const double h = rod.y2 - rod.y1;
+            rod.x2 = rod.x1 + w * scale.x;
+            rod.y2 = rod.y1 + h * scale.y;
+        }
+
         if (_logger) {
-            _logger->debug("Frame {}: RoD from source: {}x{}",
-                          frame,
-                          static_cast<int>(rod.x2 - rod.x1),
-                          static_cast<int>(rod.y2 - rod.y1));
+            if (scaled) {
+                _logger->debug("Frame {}: RoD from source × predicted scale ({:.3f},{:.3f}): {}x{}",
+                              frame, scale.x, scale.y,
+                              static_cast<int>(rod.x2 - rod.x1),
+                              static_cast<int>(rod.y2 - rod.y1));
+            } else {
+                _logger->debug("Frame {}: RoD from source: {}x{}",
+                              frame,
+                              static_cast<int>(rod.x2 - rod.x1),
+                              static_cast<int>(rod.y2 - rod.y1));
+            }
         }
         return true;
     }
@@ -2747,6 +2781,11 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
         });
         if (_logger) _logger->info("AsyncJobManager initialized successfully");
     }
+    // Apply the user's "Timeout (s)" on every render entry so per-instance
+    // adjustments take effect immediately (no plugin reinit required).
+    if (_jobManager && _timeout) {
+        _jobManager->setMaxJobDurationSec(_timeout->getValue());
+    }
 
     // STEP 2 (sequence plugins only): manage the single sequence-wide job
     if (isSequencePlugin() && _jobManager) {
@@ -2990,6 +3029,10 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
             _jobManager->setStatusUpdateCallback([this]() {
                 this->updateJobStatusDisplay();
             });
+        }
+        // Push the live user timeout into the (possibly fresh) manager.
+        if (_jobManager && _timeout) {
+            _jobManager->setMaxJobDurationSec(_timeout->getValue());
         }
 
         // Submit job asynchronously (TRULY NON-BLOCKING!)
