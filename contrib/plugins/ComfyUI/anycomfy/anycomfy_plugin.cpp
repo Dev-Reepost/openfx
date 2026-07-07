@@ -643,8 +643,10 @@ void AnyComfyPlugin::createTemplateWorkflow()
             if (_logger) _logger->warn("Warning: Could not verify UI file content: {}", e.what());
         }
 
-        // Open ComfyUI in browser with this workflow (will auto-load if extension is installed)
-        openComfyUIInBrowser(workflowName);
+        // Open ComfyUI in browser with this workflow (will auto-load if extension is installed).
+        // New templates are created flat at workflows/<name>/<name>.json, so pass that
+        // path (relative to the ComfyUI input dir) verbatim.
+        openComfyUIInBrowser("workflows/" + workflowName + "/" + workflowName + ".json");
 
     } catch (const std::exception& e) {
         if (_logger) _logger->error("Failed to write template workflow: {}", e.what());
@@ -698,6 +700,19 @@ void AnyComfyPlugin::openExistingWorkflow()
     }
     fs::path uiWorkflowPath = uiPathStr;
 
+    // Path the OFX.AutoLoader will fetch, RELATIVE to the ComfyUI input dir,
+    // preserving the real (possibly nested) subfolder structure. Passing only
+    // the bare workflow name loses operator subfolders like QUENTIN/Depth_Crafter
+    // and makes the autoloader's /view fetch 404 → ComfyUI opens its default
+    // workflow instead of the selected one.
+    std::string relativeUiPath;
+    {
+        std::error_code ec;
+        fs::path rel = fs::relative(uiWorkflowPath, fs::path(comfyInputDir), ec);
+        relativeUiPath = (ec || rel.empty()) ? uiWorkflowPath.filename().string()
+                                             : rel.generic_string();
+    }
+
     // Extract workflow name from path
     // If in standard location: workflows/<name>/<name>.json -> workflow name = directory name
     // Otherwise: derive from filename
@@ -729,7 +744,7 @@ void AnyComfyPlugin::openExistingWorkflow()
     // Prefer UI format for editing (that's what ComfyUI uses)
     if (fs::exists(uiWorkflowPath)) {
         if (_logger) _logger->info("Found UI format workflow, opening for editing");
-        openComfyUIInBrowser(workflowName);
+        openComfyUIInBrowser(relativeUiPath);
     }
     else if (fs::exists(apiWorkflowPath)) {
         // Only API format exists - try to convert to UI format
@@ -753,11 +768,11 @@ void AnyComfyPlugin::openExistingWorkflow()
             if (_logger) _logger->info("Created UI format workflow: {}", uiWorkflowPath.string());
 
             // Now open in browser
-            openComfyUIInBrowser(workflowName);
+            openComfyUIInBrowser(relativeUiPath);
         } catch (const std::exception& e) {
             if (_logger) _logger->error("Failed to convert API to UI format: {}", e.what());
             // Still try to open browser - user can load manually
-            openComfyUIInBrowser(workflowName);
+            openComfyUIInBrowser(relativeUiPath);
         }
     }
     else {
@@ -766,9 +781,9 @@ void AnyComfyPlugin::openExistingWorkflow()
     }
 }
 
-void AnyComfyPlugin::openComfyUIInBrowser(const std::string& workflowName)
+void AnyComfyPlugin::openComfyUIInBrowser(const std::string& relativeWorkflowPath)
 {
-    if (_logger) _logger->info("Opening ComfyUI in browser with workflow: {}", workflowName);
+    if (_logger) _logger->info("Opening ComfyUI in browser with workflow: {}", relativeWorkflowPath);
 
     // Get server address and port
     std::string serverAddress;
@@ -788,12 +803,18 @@ void AnyComfyPlugin::openComfyUIInBrowser(const std::string& workflowName)
     // The workflow is loaded directly from its subdirectory (not copied)
     // This requires the OFX.AutoLoader extension to be installed in ComfyUI
     if (!comfyInputDir.empty()) {
-        // Workflow path relative to input dir: workflows/<WORKFLOW_NAME>/<WORKFLOW_NAME>.json
-        // The autoloader JS will load from this path and ComfyUI will save back to the same location
-        std::string relativePath = "workflows/" + workflowName + "/" + workflowName + ".json";
+        // relativeWorkflowPath is the UI-format workflow path relative to the
+        // ComfyUI input dir, with the REAL subfolder structure preserved —
+        // operator workflows are nested (e.g.
+        // "workflows/QUENTIN/Depth_Crafter/Depth_Crafter_Vid_ofx.json").
+        // The OFX.AutoLoader extension parses subfolder + filename out of this
+        // and fetches via /view, so it must NOT be flattened to
+        // workflows/<name>/<name>.json — flattening 404s and ComfyUI silently
+        // falls back to its default workflow.
+        const std::string& relativePath = relativeWorkflowPath;
 
         // Verify the workflow file exists
-        fs::path workflowPath = fs::path(comfyInputDir) / "workflows" / workflowName / (workflowName + ".json");
+        fs::path workflowPath = fs::path(comfyInputDir) / relativePath;
         if (!fs::exists(workflowPath)) {
             if (_logger) _logger->warn("Workflow file not found: {}", workflowPath.string());
         }
