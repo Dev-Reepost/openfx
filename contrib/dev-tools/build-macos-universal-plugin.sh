@@ -165,6 +165,8 @@ install_conan_dependencies() {
         -pr:b=default \
         --build=missing \
         -o "&:build_comfyui_plugins=True" \
+        -o "*:shared=False" \
+        -o "expat/*:shared=True" \
         -of="$build_dir" 2>&1; then
 
         log_error "Failed to install $arch_name dependencies via Conan"
@@ -177,6 +179,8 @@ install_conan_dependencies() {
             -pr:b=default \
             --build="*" \
             -o "&:build_comfyui_plugins=True" \
+            -o "*:shared=False" \
+            -o "expat/*:shared=True" \
             -of="$build_dir"
     fi
 }

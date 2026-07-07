@@ -121,6 +121,8 @@ docker run --rm \
             -pr:b=default \
             --build=missing \
             -o "&:build_comfyui_plugins=True" \
+            -o '*:shared=False' \
+            -o 'expat/*:shared=True' \
             -of=build/linux
 
         echo '[INFO] Configuring CMake...'
