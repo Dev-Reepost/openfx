@@ -14,6 +14,38 @@ endif()
 
 message(STATUS "Building AIFX plugins")
 
+# In the openfx fork, OpenFX is the enclosing repo (in-tree), so OPENFX_SOURCE_DIR
+# is NOT populated by FetchContent the way it is in the standalone aifx repo.
+# Fall back to the top-level source dir (where Support/ and Examples/ live) so the
+# per-plugin CMakeLists that reference ${OPENFX_SOURCE_DIR}/... resolve correctly.
+if(NOT OPENFX_SOURCE_DIR)
+    set(OPENFX_SOURCE_DIR "${CMAKE_SOURCE_DIR}")
+    message(STATUS "OPENFX_SOURCE_DIR not set; defaulting to ${OPENFX_SOURCE_DIR}")
+endif()
+
+# --- Linux load-portability hardening (ported from aifx plugins/CMakeLists.txt) ---
+#
+# Every dependency links statically into each .ofx. Without an export-control
+# version script the plugin re-exports ~3700 dependency symbols and a host (Flame)
+# interposes them -> SIGSEGV at instantiation. And with libstdc++ dynamic, DaVinci
+# Resolve's libProResRAW.so (an older statically-linked libstdc++ in the global
+# scope) binds our std::filesystem calls to its stale copy -> SIGSEGV. Fix: export
+# only the three OFX C entry points (ofx_exports.version), -Bsymbolic, and
+# -static-libstdc++. Deliberately NOT -static-libgcc: that pulls
+# _dl_find_object@GLIBC_2.35, which Rocky Linux 9 (glibc 2.34) cannot satisfy, so
+# the plugin would fail to load in Flame. macOS/dyld is immune, so this is
+# Linux-only.
+function(aifx_harden_ofx_exports _tgt)
+    if(UNIX AND NOT APPLE)
+        target_link_options(${_tgt} PRIVATE
+            "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ofx_exports.version"
+            "-Wl,-Bsymbolic"
+            "-static-libstdc++")
+        set_property(TARGET ${_tgt} APPEND PROPERTY
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ofx_exports.version")
+    endif()
+endfunction()
+
 # --- Build-time defaults.json merge ---------------------------------------
 #
 # Each plugin's bundle ships a Contents/Resources/config/defaults.json that
@@ -78,7 +110,7 @@ target_include_directories(ComfyUICommon PUBLIC
 
 # --- Plugins ---------------------------------------------------------------
 
-# V1 release scope (7 plugins).
+# V1 release scope (7 plugins, published via the aifx repo).
 add_subdirectory(depth_da3)
 add_subdirectory(depth_crafter)
 add_subdirectory(normal_crafter)
@@ -86,6 +118,19 @@ add_subdirectory(segmentation_sam3)
 add_subdirectory(matte_mama)
 add_subdirectory(matte_ma2)
 add_subdirectory(upscale_seedvr2)
+
+# Unpublished / in-development plugins (fork only, not shipped via aifx).
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/anycomfy/CMakeLists.txt)
+    add_subdirectory(anycomfy)
+endif()
+
+# Apply Linux load-portability hardening to every plugin target (no-op off Linux).
+foreach(_tgt DepthAnything3 DepthCrafter NormalCrafter SegmentationSAM3
+             MatteMaMa MatteMA2 UpscaleSeedVR2 AnyComfy)
+    if(TARGET ${_tgt})
+        aifx_harden_ofx_exports(${_tgt})
+    endif()
+endforeach()
 
 # Tests build only if the dir was copied.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
