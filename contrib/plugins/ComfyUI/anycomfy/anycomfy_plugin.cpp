@@ -40,6 +40,7 @@ AnyComfyPlugin::AnyComfyPlugin(OfxImageEffectHandle handle)
     , _comfyUIInputDir(nullptr)
     , _newWorkflowName(nullptr)
     , _newWorkflowInputCount(nullptr)
+    , _frameLimit(nullptr)
 {
     // Fetch AnyComfy-specific parameters
     _createNewWorkflow = fetchPushButtonParam("createNewWorkflow");
@@ -47,6 +48,16 @@ AnyComfyPlugin::AnyComfyPlugin(OfxImageEffectHandle handle)
     _comfyUIInputDir = fetchStringParam("comfyUIInputDir");
     _newWorkflowName = fetchStringParam("newWorkflowName");
     _newWorkflowInputCount = fetchChoiceParam("newWorkflowInputCount");
+    _frameLimit = fetchIntParam("frameLimit");
+}
+
+int AnyComfyPlugin::getImageLoadCap() const
+{
+    // Bounds both the base's Collect & Submit frame range and the LoadEXR
+    // image_load_cap injected into the workflow. 0 = the whole clip.
+    int cap = 0;
+    if (_frameLimit) _frameLimit->getValue(cap);
+    return cap;
 }
 
 AnyComfyPlugin::~AnyComfyPlugin()
@@ -1070,8 +1081,19 @@ json AnyComfyPlugin::injectPathsIntoWorkflow(const json& workflow, int frame,
                         nodeData["inputs"]["filepath"] = comfyInputPath;
                         loadEXRCount++;
 
+                        // Sequence mode: the injected path is the collected input
+                        // FOLDER, and the base wrote getImageLoadCap() frames into
+                        // it. Override the operator's literal image_load_cap (which
+                        // was only their test batch size) so LoadEXR loads exactly
+                        // the collected sequence. 0 = load every frame in the folder.
+                        if (isSequencePlugin()) {
+                            nodeData["inputs"]["image_load_cap"] = getImageLoadCap();
+                        }
+
                         if (_logger) {
-                            _logger->info("LoadEXR '{}' <- {} : {}", nodeId, inputId, comfyInputPath);
+                            _logger->info("LoadEXR '{}' <- {} : {} (image_load_cap={})",
+                                          nodeId, inputId, comfyInputPath,
+                                          isSequencePlugin() ? getImageLoadCap() : -1);
                         }
                     }
                 }
@@ -1491,7 +1513,9 @@ void AnyComfyPluginFactory::describe(OFX::ImageEffectDescriptor &desc)
     desc.setHostFrameThreading(false);
     desc.setSupportsMultiResolution(true);
     desc.setSupportsTiles(false);
-    desc.setTemporalClipAccess(false);
+    // Sequence mode: render() collects all frames in [start..end] via fetchImage(t),
+    // so temporal clip access is required.
+    desc.setTemporalClipAccess(true);
     desc.setRenderTwiceAlways(false);
     desc.setSupportsMultipleClipPARs(false);
     desc.setRenderThreadSafety(OFX::eRenderInstanceSafe);
@@ -1529,7 +1553,8 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         OFX::ClipDescriptor *srcClip = desc.defineClip(kOfxImageEffectSimpleSourceClipName);
         srcClip->addSupportedComponent(OFX::ePixelComponentRGBA);
         srcClip->addSupportedComponent(OFX::ePixelComponentRGB);
-        srcClip->setTemporalClipAccess(false);
+        // Sequence mode collects the clip via fetchImage(t) across the range.
+        srcClip->setTemporalClipAccess(true);
         srcClip->setSupportsTiles(false);
         srcClip->setIsMask(false);
         // Make optional in General context to support generator workflows
@@ -1608,7 +1633,25 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     // Base-class params (populates Project / Processing / Server groups)
     // skipGroupHeaders=true – we already added the group headers above
     // ========================================================================
-    BasePlugin::describeCommonParameters(desc, context, page, page, page, &configDefaults, true);
+    BasePlugin::describeCommonParameters(desc, context, page, page, page, &configDefaults,
+                                         /*skipGroupHeaders=*/true, /*isSequencePlugin=*/true);
+
+    // Frame Limit — bounds both the Collect & Submit range and LoadEXR's
+    // image_load_cap. 0 = the whole clip (default). Lower it to cap memory on
+    // long shots or for quick previews.
+    {
+        OFX::IntParamDescriptor *frameLimit = desc.defineIntParam("frameLimit");
+        frameLimit->setLabel("Frame Limit");
+        frameLimit->setHint("Maximum number of frames collected and processed per job. "
+                            "0 = the whole clip. Lower this to cap memory on long shots "
+                            "or for quick previews.");
+        frameLimit->setDefault(0);
+        frameLimit->setRange(0, 100000);
+        frameLimit->setDisplayRange(0, 500);
+        frameLimit->setAnimates(false);
+        frameLimit->setParent(*processingGroup);
+        page->addChild(*frameLimit);
+    }
 
     // The base resets projectGroup's label to "Project" – put it back
     setProjectGroup->setLabel("Set Project");

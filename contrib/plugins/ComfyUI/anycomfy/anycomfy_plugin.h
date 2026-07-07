@@ -37,6 +37,20 @@ public:
     virtual json buildWorkflow(int frame, const std::map<std::string, std::string>& inputPaths) override;
     virtual std::vector<std::string> getRequiredModels() override;
 
+    // AnyComfy runs in sequence ("Collect & Submit") mode: it collects the whole
+    // clip and submits a single ComfyUI job. This is the general-correct behavior
+    // for both temporal models (which need the whole sequence for coherence) and
+    // per-frame models (which just process each frame of the batch independently),
+    // and it matches how operators actually author their workflows — every raw
+    // workflow observed uses a batch LoadEXR, never a single frame. The operator's
+    // literal image_load_cap is only their test batch size and is overridden at
+    // injection time with getImageLoadCap().
+    // NOTE: the base's sequence collection fetches only the primary source clip,
+    // so multi-input temporal workflows (2+ LoadEXR) are not yet fully covered —
+    // tracked as a follow-up needing multi-clip collection in the base.
+    virtual bool isSequencePlugin() const override { return true; }
+    virtual int  getImageLoadCap() const override;
+
     // AnyComfy includes workflow name in basename since each workflow represents a different effect
     virtual bool includeWorkflowInBasename() const override { return true; }
 
@@ -59,6 +73,7 @@ private:
     OFX::StringParam     *_comfyUIInputDir;    // ComfyUI input directory path (for auto-loading workflows)
     OFX::StringParam     *_newWorkflowName;    // User-specified name for new workflows (optional)
     OFX::ChoiceParam     *_newWorkflowInputCount;  // Number of inputs for new workflow template (0-3)
+    OFX::IntParam        *_frameLimit;             // Max frames collected/loaded per sequence job (0 = whole clip)
 
     // Helper methods
     std::string getWorkflowsPath() const;           // Get base path to workflows directory
