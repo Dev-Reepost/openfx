@@ -800,8 +800,9 @@ void AnyComfyPlugin::openComfyUIInBrowser(const std::string& relativeWorkflowPat
     urlStream << "http://" << serverAddress << ":" << serverPort;
 
     // If ComfyUI input directory is configured, add auto-load URL parameter
-    // The workflow is loaded directly from its subdirectory (not copied)
-    // This requires the OFX.AutoLoader extension to be installed in ComfyUI
+    // The workflow is loaded directly from its subdirectory (not copied).
+    // This requires the 'comfyui-ofx-autoload' custom node installed on the
+    // ComfyUI server (modern ComfyUI no longer serves legacy web/extensions/).
     if (!comfyInputDir.empty()) {
         // relativeWorkflowPath is the UI-format workflow path relative to the
         // ComfyUI input dir, with the REAL subfolder structure preserved —
@@ -822,7 +823,7 @@ void AnyComfyPlugin::openComfyUIInBrowser(const std::string& relativeWorkflowPat
         urlStream << "?load_local_json=" << relativePath;
         if (_logger) _logger->info("Opening URL with auto-load: {}", urlStream.str());
         if (_logger) _logger->info("Workflow will be loaded from and saved to: {}", workflowPath.string());
-        if (_logger) _logger->info("Note: Requires OFX.AutoLoader extension in ComfyUI/web/extensions/");
+        if (_logger) _logger->info("Note: requires the 'comfyui-ofx-autoload' custom node in ComfyUI/custom_nodes/");
     } else {
         if (_logger) _logger->info("Opening URL (manual load required): {}", urlStream.str());
         if (_logger) _logger->info("User should manually load workflow using Ctrl+O or drag-and-drop");
@@ -1927,7 +1928,7 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
             "Example: " + examplePath + "\n\n"
             "The plugin copies workflow files here so ComfyUI's /view endpoint\n"
             "can serve them for auto-loading in the browser.\n\n"
-            "Requires: OFX.AutoLoader extension in ComfyUI/web/extensions/\n"
+            "Requires: the 'comfyui-ofx-autoload' custom node in ComfyUI/custom_nodes/\n"
             "Leave empty to disable auto-loading (manual load required)."
         );
         param->setStringType(OFX::eStringTypeDirectoryPath);

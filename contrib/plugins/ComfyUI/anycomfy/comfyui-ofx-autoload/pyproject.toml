@@ -1,0 +1,17 @@
+[project]
+name = "comfyui-ofx-autoload"
+description = "Browser helpers for the AIFX AnyComfy OpenFX plugin: auto-load the selected workflow when the plugin opens ComfyUI, and save edits back to the same file."
+version = "1.0.0"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.9"
+readme = "README.md"
+# No Python dependencies — this node ships only web (JS) assets.
+
+[project.urls]
+Repository = "https://github.com/Dev-Reepost/openfx"
+
+# ComfyUI Registry metadata (used by `comfy node` / ComfyUI-Manager).
+# Set PublisherId to your registry publisher handle before publishing.
+[tool.comfy]
+PublisherId = "reepost"
+DisplayName = "AIFX OFX AutoLoad"

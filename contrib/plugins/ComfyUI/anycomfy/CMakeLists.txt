@@ -76,6 +76,14 @@ if(APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
             "${RESOURCES_DIR}"
 
+        # Ship the ComfyUI companion custom node inside the bundle so it can be
+        # copied to the ComfyUI server's custom_nodes/. Modern ComfyUI serves web
+        # extensions only via a custom node's WEB_DIRECTORY, not legacy
+        # web/extensions/ drop-ins. See comfyui-ofx-autoload/README.md.
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/comfyui-ofx-autoload"
+            "${RESOURCES_DIR}/comfyui-ofx-autoload"
+
         COMMENT "Creating AnyComfy.ofx.bundle structure with resources"
     )
 endif()
@@ -95,6 +103,11 @@ if(UNIX AND NOT APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
             "${RESOURCES_DIR}"
 
+        # Ship the ComfyUI companion custom node (see macOS block above).
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/comfyui-ofx-autoload"
+            "${RESOURCES_DIR}/comfyui-ofx-autoload"
+
         COMMENT "Creating AnyComfy.ofx.bundle structure with resources (Linux)"
     )
 endif()
@@ -113,6 +126,11 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
             "${RESOURCES_DIR}"
+
+        # Ship the ComfyUI companion custom node (see macOS block above).
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/comfyui-ofx-autoload"
+            "${RESOURCES_DIR}/comfyui-ofx-autoload"
 
         COMMENT "Creating AnyComfy.ofx.bundle structure with resources (Windows)"
     )
