@@ -82,14 +82,16 @@ endif()
 
 # For Linux, create .ofx.bundle structure at build time
 if(UNIX AND NOT APPLE)
-    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Contents/Linux-${CMAKE_SYSTEM_PROCESSOR}")
-    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Resources")
+    # OFX-spec arch dir: hosts look for Contents/Linux-x86-64 (dash, not the
+    # underscore CMAKE_SYSTEM_PROCESSOR yields) and Contents/Resources.
+    set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Contents/Linux-x86-64")
+    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/AnyComfy.ofx.bundle/Contents/Resources")
 
     add_custom_command(TARGET AnyComfy POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AnyComfy> "${BUNDLE_DIR}/"
 
-        # Copy resources (Linux uses Resources/ at bundle root level)
+        # Copy resources into Contents/Resources (OFX spec)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCES_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
@@ -102,13 +104,13 @@ endif()
 # For Windows, create .ofx.bundle structure at build time
 if(WIN32)
     set(BUNDLE_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/Win64")
-    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Resources")
+    set(RESOURCES_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/AnyComfy.ofx.bundle/Contents/Resources")
 
     add_custom_command(TARGET AnyComfy POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:AnyComfy> "${BUNDLE_DIR}/"
 
-        # Copy resources (Windows uses Resources/ at bundle root level like Linux)
+        # Copy resources into Contents/Resources (OFX spec)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCES_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
