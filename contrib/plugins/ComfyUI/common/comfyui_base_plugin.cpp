@@ -12,9 +12,14 @@
 #include <thread>
 #include <cstring>
 #include <filesystem>
+#include <system_error>
 #include <algorithm>
 
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
     #include <sys/stat.h>
     #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #else
@@ -23,20 +28,138 @@
 
 #ifdef __APPLE__
 #include <dlfcn.h>
-// Anchor symbol for dladdr: any address in this shared library's data segment works.
-// A pointer-to-member-function cannot be reinterpret_cast'd to void*, so we use this instead.
+#endif
+
+#if defined(__APPLE__) || defined(_WIN32)
+// Anchor symbol used to locate this shared library at runtime when the host
+// does not populate kOfxPluginPropFilePath (e.g. DaVinci Resolve): its address
+// lies inside this module, resolved via dladdr (macOS) or GetModuleHandleEx
+// FROM_ADDRESS (Windows). A pointer-to-member-function cannot be cast to void*,
+// so we use this free symbol instead.
 static const char _dladdr_anchor = 0;
+#endif
+
+#if !defined(_WIN32)
+#include <execinfo.h>
+#include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace ComfyUI {
 
+#if !defined(_WIN32)
+// ---------------------------------------------------------------------------
+// Crash backtrace handler (diagnostic).
+//
+// Flame on Linux segfaults the instant a plugin is instanced, in a code path
+// that runs AFTER the constructor finishes logging but BEFORE any logged
+// instance method — so spdlog never captures where. This installs an
+// async-signal-safe SIGSEGV/SIGABRT/SIGBUS handler that writes a symbolized
+// backtrace straight to a raw fd (~/comfyui_crash_<date>.log) and then chains
+// to whatever handler Flame had installed, so the host still does its own
+// reporting. backtrace_symbols_fd() and write() are async-signal-safe.
+// ---------------------------------------------------------------------------
+namespace {
+
+int                g_crashFd = -1;
+struct sigaction   g_oldSegv, g_oldAbrt, g_oldBus, g_oldFpe, g_oldIll;
+
+// async-signal-safe raw write of a C string
+void crashWrite(const char* s) {
+    if (g_crashFd < 0 || !s) return;
+    size_t n = 0; while (s[n]) ++n;
+    ssize_t rc = ::write(g_crashFd, s, n); (void)rc;
+}
+
+// async-signal-safe unsigned -> hex
+void crashWriteHex(unsigned long v) {
+    char buf[2 + sizeof(v) * 2];
+    char* p = buf;
+    *p++ = '0'; *p++ = 'x';
+    bool started = false;
+    for (int shift = (int)(sizeof(v) * 8) - 4; shift >= 0; shift -= 4) {
+        unsigned nib = (v >> shift) & 0xF;
+        if (nib || started || shift == 0) {
+            *p++ = (char)(nib < 10 ? '0' + nib : 'a' + (nib - 10));
+            started = true;
+        }
+    }
+    ssize_t rc = ::write(g_crashFd, buf, (size_t)(p - buf)); (void)rc;
+}
+
+void crashHandler(int sig, siginfo_t* info, void* ucontext) {
+    crashWrite("\n=== AIFX PLUGIN CRASH ===\nsignal=");
+    crashWriteHex((unsigned long)sig);
+    crashWrite(" fault_addr=");
+    crashWriteHex(info ? (unsigned long)info->si_addr : 0UL);
+    crashWrite("\nbacktrace:\n");
+
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, n, g_crashFd);
+    crashWrite("=== END CRASH ===\n");
+    if (g_crashFd >= 0) ::fsync(g_crashFd);
+
+    // Chain to the host's previous handler so Flame still reports/cleans up.
+    struct sigaction* old = nullptr;
+    switch (sig) {
+        case SIGSEGV: old = &g_oldSegv; break;
+        case SIGABRT: old = &g_oldAbrt; break;
+        case SIGBUS:  old = &g_oldBus;  break;
+        case SIGFPE:  old = &g_oldFpe;  break;
+        case SIGILL:  old = &g_oldIll;  break;
+    }
+    if (old) {
+        sigaction(sig, old, nullptr);
+        if (old->sa_flags & SA_SIGINFO) {
+            if (old->sa_sigaction) { old->sa_sigaction(sig, info, ucontext); return; }
+        } else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) {
+            old->sa_handler(sig); return;
+        }
+    }
+    raise(sig);  // fall back to default disposition
+}
+
+} // anonymous namespace
+
+void installCrashHandler(const std::string& home) {
+    static std::once_flag once;
+    std::call_once(once, [&]() {
+        // Open a dedicated crash log next to the daily plugin log.
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+        std::tm* now_tm = std::localtime(&now_c);
+        char dateStamp[16];
+        std::strftime(dateStamp, sizeof(dateStamp), "%Y%m%d", now_tm);
+        std::string path = (home.empty() ? std::string("/tmp") : home)
+                           + "/comfyui_crash_" + dateStamp + ".log";
+        g_crashFd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (g_crashFd < 0) return;
+
+        struct sigaction sa;
+        std::memset(&sa, 0, sizeof(sa));
+        sa.sa_sigaction = crashHandler;
+        sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGSEGV, &sa, &g_oldSegv);
+        sigaction(SIGABRT, &sa, &g_oldAbrt);
+        sigaction(SIGBUS,  &sa, &g_oldBus);
+        sigaction(SIGFPE,  &sa, &g_oldFpe);
+        sigaction(SIGILL,  &sa, &g_oldIll);
+    });
+}
+#else
+void installCrashHandler(const std::string&) {}
+#endif
+
 void BasePlugin::initializeLogger()
 {
     try {
-        // Check if HOME environment variable exists
-        const char* home = getenv("HOME");
-        if (!home) {
-            std::cerr << "WARNING: HOME environment variable not set, logging disabled" << std::endl;
+        // Resolve the home directory (HOME on POSIX, USERPROFILE on Windows).
+        std::string home = getHomeDir();
+        if (home.empty()) {
+            std::cerr << "WARNING: could not resolve home directory, logging disabled" << std::endl;
             return;
         }
 
@@ -89,7 +212,8 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     , _enableProcessing(nullptr)
     , _serverAddress(nullptr)
     , _serverPort(nullptr)
-    , _macMountPath(nullptr)
+    , _localMountPath(nullptr)
+    , _serverMountPath(nullptr)
     , _projectName(nullptr)
     , _workflowName(nullptr)
     , _outputVersion(nullptr)
@@ -100,6 +224,11 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
 {
     // Initialize logger first
     initializeLogger();
+
+    // Install a crash backtrace handler (diagnostic). Writes a symbolized stack
+    // to ~/comfyui_crash_<date>.log on SIGSEGV/SIGABRT/SIGBUS, then chains to
+    // the host's handler. Idempotent across instances.
+    installCrashHandler(getHomeDir());
 
     if (_logger) _logger->info("BasePlugin constructor started");
 
@@ -306,6 +435,7 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
             const char* home = getenv("HOME");
             if (home) _logger->info("HOME: '{}'", home);
             else _logger->warn("HOME: NOT SET");
+            _logger->info("Resolved home dir: '{}'", getHomeDir());
         } catch (...) { _logger->warn("HOME: ERROR"); }
 
         try {
@@ -434,8 +564,8 @@ BasePlugin::BasePlugin(OfxImageEffectHandle handle)
     try { _enableProcessing = fetchBooleanParam("enableProcessing"); } catch (...) {}
     _serverAddress = fetchStringParam("serverAddress");
     _serverPort = fetchIntParam("serverPort");
-    _macMountPath = fetchStringParam("macMountPath");
-    _winMountPath = fetchStringParam("winMountPath");
+    _localMountPath = fetchStringParam("localMountPath");
+    _serverMountPath = fetchStringParam("serverMountPath");
     _projectName = fetchStringParam("projectName");
     _workflowName = fetchStringParam("workflowName");
     _outputVersion = fetchStringParam("outputVersion");
@@ -551,7 +681,7 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
     //     width/height — the next render will produce different sized output.
     if (paramName == "projectName" || paramName == "workflowName" ||
         paramName == "outputVersion" || paramName == "workflowFilePath" ||
-        paramName == "macMountPath"  || paramName == "winMountPath" ||
+        paramName == "localMountPath" || paramName == "serverMountPath" ||
         paramName == "resolution"    || paramName == "maxResolution") {
         std::lock_guard<std::mutex> lock(_cacheMutex);
         if (!_cacheDimensions.empty() || !_cacheFileExists.empty()) {
@@ -573,10 +703,18 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
     static const std::unordered_set<std::string> kSystemParams = {
         "jobStatus", "jobStatusColor", "refreshTrigger", "asyncMode", "placeholderMode"
     };
-    if (isSequencePlugin() && kSystemParams.find(paramName) == kSystemParams.end()) {
+    // A genuine output-affecting parameter change invalidates any in-flight job.
+    // The "collectAndSubmit" button is an action, not an output parameter, so it
+    // must NOT land here: otherwise every press cancels the running job locally
+    // (without stopping it on the server), the orphaned job still writes its
+    // output, and the next submit collides on it ("File exists already").
+    if (isSequencePlugin() && paramName != "collectAndSubmit" &&
+        kSystemParams.find(paramName) == kSystemParams.end()) {
         if (!_pendingSequenceOutputPrefix.empty()) {
-            if (_logger) _logger->info("Parameter '{}' changed - cancelling pending sequence job (startFrame={})", paramName, _sequenceStartFrame);
-            if (_jobManager) _jobManager->cancelJob(_sequenceStartFrame);
+            if (_logger) _logger->info("Parameter '{}' changed - cancelling in-flight sequence job (startFrame={})", paramName, _sequenceStartFrame);
+            // Interrupt on the server too — a local-only cancel leaves the job
+            // running, so it would still write its output and block the resubmit.
+            if (_jobManager) _jobManager->cancelAllJobs(/*interruptServer=*/true);
             _pendingSequenceOutputPrefix.clear();
         }
     }
@@ -597,14 +735,14 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
         try {
             std::string project, mountPath;
             project = getTrimmedStringParam(_projectName);
-            mountPath = getTrimmedStringParam(_macMountPath);
+            mountPath = getLocalMountPath();
 
             if (project.empty()) {
                 if (_logger) { _logger->warn("  ABORT: project name is empty"); _logger->flush(); }
                 return;
             }
             if (mountPath.empty()) {
-                if (_logger) { _logger->warn("  ABORT: Mac mount path is empty — set it in the Server tab"); _logger->flush(); }
+                if (_logger) { _logger->warn("  ABORT: no mount path set for this OS — fill in the macOS / Windows / Linux mount path for this machine in the Server tab"); _logger->flush(); }
                 return;
             }
 
@@ -665,11 +803,21 @@ void BasePlugin::changedParam(const OFX::InstanceChangedArgs &args,
 
         if (_logger) _logger->info("Updating ComfyUI server to {}:{}", address, port);
 
-        // Create new client with updated server info
+        // Update the server address IN PLACE — do NOT recreate the Client.
+        // AsyncJobManager holds a raw (non-owning) Client* captured once at
+        // construction; destroying the Client here while a job (or its background
+        // submission/polling thread) still references it is a use-after-free —
+        // observed as a submit failure with an empty host / garbage port
+        // (":-508401456") and std::bad_alloc. setServerAddress() mutates the
+        // existing object under its own lock, keeping the pointer stable.
         std::string serverUrl = address + ":" + std::to_string(port);
-        _comfyClient.reset(new Client(serverUrl));
+        if (_comfyClient) {
+            _comfyClient->setServerAddress(serverUrl);
+        } else {
+            _comfyClient.reset(new Client(serverUrl));
+        }
 
-        if (_logger) _logger->info("ComfyUI client recreated successfully");
+        if (_logger) _logger->info("ComfyUI server updated successfully");
     }
 }
 
@@ -717,7 +865,7 @@ void BasePlugin::executePendingCollect()
 
         std::string mountPath, project, workflowName, version, serverAddress;
         int serverPort = 0;
-        mountPath = getTrimmedStringParam(_macMountPath);
+        mountPath = getLocalMountPath();
         project = getTrimmedStringParam(_projectName);
         workflowName = getTrimmedStringParam(_workflowName);
         version = getTrimmedStringParam(_outputVersion);
@@ -739,7 +887,7 @@ void BasePlugin::executePendingCollect()
             return;
         }
         if (mountPath.empty()) {
-            if (_logger) { _logger->warn("  ABORT: Mac mount path is empty"); _logger->flush(); }
+            if (_logger) { _logger->warn("  ABORT: no mount path set for this OS (macOS/Windows/Linux mount path for this machine is empty in the Server tab)"); _logger->flush(); }
             return;
         }
 
@@ -767,6 +915,29 @@ void BasePlugin::executePendingCollect()
             try { if (_jobStatus)      _jobStatus->setValue(text); }      catch (...) {}
             try { if (_jobStatusColor) _jobStatusColor->setValue(sr, sg, sb); } catch (...) {}
         };
+
+        // In-flight de-duplication. The disk cache check below only sees outputs
+        // already written, not a job still running (a sequence job can take many
+        // minutes). Without this guard, a second Collect & Submit during that
+        // window queues a duplicate that SaveEXR later aborts with "File exists
+        // already" once the first job writes its frames. If a job for this exact
+        // output is already queued/processing, ignore the press.
+        {
+            std::string outputPrefix = outputDir + "/" + base;
+            if (_jobManager && _pendingSequenceOutputPrefix == outputPrefix) {
+                JobStatus st = _jobManager->getJobStatus(_sequenceStartFrame);
+                if (st == JobStatus::QUEUED || st == JobStatus::PROCESSING) {
+                    if (_logger) {
+                        _logger->info("  Sequence job already in flight for '{}' (startFrame={}) — ignoring duplicate Collect & Submit",
+                                      outputPrefix, _sequenceStartFrame);
+                        _logger->flush();
+                    }
+                    setStatus("Already processing this shot — duplicate submission ignored", 1.0, 0.55, 0.0);
+                    return;
+                }
+            }
+        }
+
         setStatus("Collecting: 0 / " + std::to_string(nTotal), 0.0, 0.7, 1.0);
 
         for (int t = startFrame; t <= endFrame; ++t) {
@@ -831,8 +1002,14 @@ void BasePlugin::executePendingCollect()
             _logger->flush();
         }
 
-        // Output cache check — same logic as before.
+        // Output cache check.
+        //   Cache ON  : if every output frame already exists, serve it and skip
+        //               submission entirely.
+        //   Cache OFF : never reuse — fall through and delete any existing frames
+        //               first, because the SaveEXR node refuses to overwrite and
+        //               would abort the whole job with "File exists already".
         {
+            const bool useCache = !_enableCache || _enableCache->getValue();
             int nFrames = endFrame - startFrame + 1;
             int existingCount = 0;
             for (int t = startFrame; t <= endFrame; ++t) {
@@ -842,7 +1019,7 @@ void BasePlugin::executePendingCollect()
                 if (std::filesystem::exists(ss.str())) ++existingCount;
             }
 
-            if (existingCount == nFrames) {
+            if (useCache && existingCount == nFrames) {
                 if (_logger) {
                     _logger->info("  All {} output frame(s) cached on disk — skipping submission", nFrames);
                     _logger->flush();
@@ -850,6 +1027,9 @@ void BasePlugin::executePendingCollect()
                 return;
             }
 
+            // Either the cache is disabled, or only some frames exist. In both
+            // cases we are about to (re)submit, so clear any existing outputs in
+            // range to keep SaveEXR from aborting on a pre-existing file.
             if (existingCount > 0) {
                 int deleted = 0;
                 for (int t = startFrame; t <= endFrame; ++t) {
@@ -1179,8 +1359,8 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     std::string address, mountPath, serverMount, project, workflowName, version;
     _serverAddress->getValue(address);
     int port = _serverPort->getValue();
-    mountPath = getTrimmedStringParam(_macMountPath);
-    serverMount = getTrimmedStringParam(_winMountPath);
+    mountPath = getLocalMountPath();
+    serverMount = getTrimmedStringParam(_serverMountPath);
     project = getTrimmedStringParam(_projectName);
     workflowName = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -1238,8 +1418,11 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
     std::string expectedOutputPath = constructExpectedOutputPath(frame);
     if (_logger) _logger->info("Expected output path: {}", expectedOutputPath);
 
+    // Cache ON: reuse an existing output. Cache OFF: never reuse — the existing
+    // file is removed below so the SaveEXR node won't abort on "File exists".
+    const bool useCache = !_enableCache || _enableCache->getValue();
     std::ifstream cachedFile(expectedOutputPath);
-    if (cachedFile.good()) {
+    if (cachedFile.good() && useCache) {
         cachedFile.close();
         if (_logger) _logger->info("✓ Output file already exists (cached): {}", expectedOutputPath);
         if (_logger) _logger->info("Skipping workflow submission, using cached result");
@@ -1276,6 +1459,15 @@ void BasePlugin::executeWorkflow(const OFX::RenderArguments &args)
 
         progressUpdate(1.0);
         return;
+    }
+
+    // Cache disabled but an old output is present: delete it so SaveEXR can
+    // rewrite the frame instead of aborting with "File exists already".
+    if (!useCache) {
+        std::error_code ec;
+        if (std::filesystem::remove(expectedOutputPath, ec) && _logger) {
+            _logger->info("Cache disabled — removed stale output before re-submission: {}", expectedOutputPath);
+        }
     }
 
     if (_logger) _logger->info("Output file does not exist, proceeding with workflow submission");
@@ -1605,7 +1797,7 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::s
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflow = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -1615,8 +1807,8 @@ std::string BasePlugin::writeInputImage(OFX::Image* img, int frame, const std::s
 
     // Build path matching output pattern: basename[_suffix].frame.exr
     // Input and output now use the same naming convention for consistency
-    // Example: /Volumes/silo2/002_COMFYUI/in/projects/acme_spot/segmentation/v001/shot01.0001.exr
-    // With suffix: /Volumes/silo2/002_COMFYUI/in/projects/acme_spot/segmentation/v001/shot01_B.0001.exr
+    // Example: /Volumes/comfyui-share/in/projects/acme_spot/segmentation/v001/shot01.0001.exr
+    // With suffix: /Volumes/comfyui-share/in/projects/acme_spot/segmentation/v001/shot01_B.0001.exr
     std::ostringstream filename;
     filename << mountPath << "/in/projects/"
              << project << "/"
@@ -1708,7 +1900,7 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
 
     // Get path components
     std::string mountPath, project, workflow, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflow = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -1802,7 +1994,7 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
                     if (_logger) _logger->info("Constructed SaveEXR filename: {}", constructedFilename);
 
                     // Build full path
-                    // Output: /Volumes/silo2/002_COMFYUI/out/<PROJECT>/<WORKFLOW>/<VERSION>/{filename}
+                    // Output: /Volumes/comfyui-share/out/<PROJECT>/<WORKFLOW>/<VERSION>/{filename}
                     std::ostringstream fullPath;
                     fullPath << mountPath << "/out/" << project << "/"
                              << workflow << "/" << version << "/" << constructedFilename;
@@ -1830,7 +2022,7 @@ std::string BasePlugin::parseOutputPath(const json& history, int frame)
                     if (_logger) _logger->info("Found output filename from history: {}", filename);
 
                     // Build full path matching Python pattern
-                    // Output: /Volumes/silo2/002_COMFYUI/out/<PROJECT>/<WORKFLOW>/<VERSION>/basename_layer_frame_version_.exr
+                    // Output: /Volumes/comfyui-share/out/<PROJECT>/<WORKFLOW>/<VERSION>/basename_layer_frame_version_.exr
                     std::ostringstream fullPath;
                     fullPath << mountPath << "/out/" << project << "/"
                              << workflow << "/" << version << "/" << filename;
@@ -1878,43 +2070,67 @@ std::string BasePlugin::getTrimmedStringParam(OFX::StringParam* param) const
     return trimmed;
 }
 
+std::string BasePlugin::getLocalMountPath() const
+{
+    // This host's mount of the shared storage, used for all local EXR I/O.
+    // If unset, assume the ComfyUI server mount is also reachable at the same
+    // path on this host (single-box setup, or an identically-mounted share) —
+    // better than silently producing empty, rootless paths.
+    std::string local = getTrimmedStringParam(_localMountPath);
+    if (!local.empty()) return local;
+    return getTrimmedStringParam(_serverMountPath);
+}
+
 std::string BasePlugin::convertPathForComfyUI(const std::string& localPath)
 {
-    // Convert client-side path to server-side path
-    // Example: /Volumes/silo2/002_COMFYUI/in/test.exr -> Z:\in\test.exr
+    // Rewrite a path from THIS machine's mount namespace into the ComfyUI
+    // server's namespace. The ComfyUI box is the Windows storage server, so the
+    // server mount is always the Windows view and the result uses backslashes.
+    // Example: /mnt/comfyui-share/in/x  ->  \\HOSTNAME\share\in\x
 
     if (_logger) _logger->info("Converting path for ComfyUI: {}", localPath);
 
-    // Get mount paths
-    std::string clientMount, serverMount;
-    clientMount = getTrimmedStringParam(_macMountPath);
-    serverMount = getTrimmedStringParam(_winMountPath);
+    const std::string clientMount = getLocalMountPath();
+    const std::string serverMount = getTrimmedStringParam(_serverMountPath);
 
     if (_logger) {
-        _logger->info("  Client mount: {}", clientMount);
-        _logger->info("  Server mount: {}", serverMount);
+        _logger->info("  Client mount (this host): {}", clientMount);
+        _logger->info("  Server mount (ComfyUI):   {}", serverMount);
     }
 
-    std::string windowsPath = localPath;
+    // No server mount configured: assume ComfyUI sees the very same path this
+    // machine does (single-box setup, or identical mount point). Return the path
+    // unchanged rather than stripping the client mount and emitting a rootless
+    // "\in\..." path — that produced empty server paths and crashed jobs.
+    if (serverMount.empty()) {
+        if (_logger) _logger->warn("  No Windows/server mount set — leaving path unchanged");
+        return localPath;
+    }
 
-    // Replace client mount path with server mount point
-    // Example: /Volumes/silo2/002_COMFYUI -> Z:
-    if (windowsPath.find(clientMount) == 0) {
-        windowsPath.replace(0, clientMount.length(), serverMount);
-        if (_logger) _logger->info("  After mount replacement: {}", windowsPath);
+    std::string serverPath = localPath;
+
+    // Swap the client mount prefix for the server mount. Only rewrite when the
+    // path actually starts with the client mount; otherwise leave it intact (we
+    // must never drop the prefix and leave a rootless path).
+    if (!clientMount.empty() && serverPath.rfind(clientMount, 0) == 0) {
+        serverPath.replace(0, clientMount.length(), serverMount);
+        if (_logger) _logger->info("  After mount replacement: {}", serverPath);
+    } else if (clientMount.empty()) {
+        if (_logger) _logger->warn("  No client mount for this host — set the mount path for this OS in the Server tab; leaving path unchanged");
+        return localPath;
     } else {
-        if (_logger) _logger->warn("  Path doesn't start with client mount! Using as-is");
+        if (_logger) _logger->warn("  Path does not start with the client mount '{}' — leaving as-is", clientMount);
     }
 
-    // Replace all forward slashes with backslashes
-    std::replace(windowsPath.begin(), windowsPath.end(), '/', '\\');
+    // The server is Windows: normalise to backslashes.
+    std::replace(serverPath.begin(), serverPath.end(), '/', '\\');
 
-    if (_logger) _logger->info("  Windows path: {}", windowsPath);
+    if (_logger) _logger->info("  Server path: {}", serverPath);
 
-    // Return the raw Windows path. nlohmann/json escapes backslashes automatically
-    // when this string is assigned to a JSON field. The customizeWorkflow() string-
-    // replacement path is responsible for escaping when substituting into raw JSON text.
-    return windowsPath;
+    // nlohmann/json escapes backslashes automatically when this is assigned to a
+    // JSON field; customizeWorkflow()'s raw string-replacement path does its own
+    // escaping when substituting into raw JSON text.
+    return serverPath;
 }
 
 std::string BasePlugin::constructExpectedOutputPath(int frame)
@@ -1925,10 +2141,10 @@ std::string BasePlugin::constructExpectedOutputPath(int frame)
     // NOTE: SaveEXR version is set to -1 (no version suffix) because the directory
     // already contains the version number (e.g., v001, v002).
     //
-    // Example: /Volumes/silo2/002_COMFYUI/out/TEST_SAM/segmentation/v001/shot01.0056.exr
+    // Example: /Volumes/comfyui-share/out/TEST_SAM/segmentation/v001/shot01.0056.exr
 
     std::string mountPath, project, workflow, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflow = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -1953,11 +2169,11 @@ std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
     // Construct the input file path that was written by writeInputImage()
     // Pattern: {mountPath}/in/projects/{project}/{workflow}/{version}/{basename}[_suffix].{frame:04d}.exr
     //
-    // Example: /Volumes/silo2/002_COMFYUI/in/projects/TEST_SAM/segmentation/v001/shot01.0056.exr
-    // With suffix: /Volumes/silo2/002_COMFYUI/in/projects/TEST_SAM/segmentation/v001/shot01_B.0056.exr
+    // Example: /Volumes/comfyui-share/in/projects/TEST_SAM/segmentation/v001/shot01.0056.exr
+    // With suffix: /Volumes/comfyui-share/in/projects/TEST_SAM/segmentation/v001/shot01_B.0056.exr
 
     std::string mountPath, project, workflow, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflow = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -1980,9 +2196,9 @@ std::string BasePlugin::constructInputPath(int frame, const std::string& suffix)
 std::string BasePlugin::constructInputFolderPath() const
 {
     // Returns the folder that holds the full EXR sequence for sequence-mode plugins.
-    // Pattern: {macMountPath}/in/projects/{project}/{workflow}/{version}/{basename}/
+    // Pattern: {mount}/in/projects/{project}/{workflow}/{version}/{basename}/
     std::string mountPath, project, workflow, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflow = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -2246,7 +2462,7 @@ std::string BasePlugin::getBundleResourcePath(const std::string& resourceName)
 
 #elif defined(__linux__)
     // On Linux, bundle structure: Plugin.ofx.bundle/Contents/Linux-{arch}/Plugin.ofx
-    //                 Resources: Plugin.ofx.bundle/Resources/{resourceName}
+    //                 Resources: Plugin.ofx.bundle/Contents/Resources/{resourceName}
     std::string pluginPath;
     try {
         pluginPath = getPropertySet().propGetString(kOfxPluginPropFilePath, false);
@@ -2263,13 +2479,61 @@ std::string BasePlugin::getBundleResourcePath(const std::string& resourceName)
     }
 
     std::string bundlePath = pluginPath.substr(0, bundlePos + 11);
-    std::string resourcePath = bundlePath + "/Resources/" + resourceName;
+    std::string resourcePath = bundlePath + "/Contents/Resources/" + resourceName;
+
+    if (_logger) _logger->debug("Resolved bundle resource path: {}", resourcePath);
+    return resourcePath;
+
+#elif defined(_WIN32)
+    // On Windows, bundle structure: Plugin.ofx.bundle\Contents\Win64\Plugin.ofx
+    //                   Resources:  Plugin.ofx.bundle\Contents\Resources\{resourceName}
+    std::string pluginPath;
+    try {
+        pluginPath = getPropertySet().propGetString(kOfxPluginPropFilePath, false);
+        if (_logger) _logger->debug("Plugin file path: {}", pluginPath);
+    } catch (...) {
+        if (_logger) _logger->warn("Could not retrieve plugin file path");
+    }
+
+    // Fallback: some hosts (e.g. DaVinci Resolve) do not populate
+    // kOfxPluginPropFilePath. Recover this module's own path from an address
+    // inside it -- the Win32 equivalent of macOS dladdr.
+    if (pluginPath.empty()) {
+        HMODULE hModule = nullptr;
+        if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(&_dladdr_anchor),
+                &hModule) && hModule) {
+            char modPath[MAX_PATH] = {0};
+            DWORD n = GetModuleFileNameA(hModule, modPath, MAX_PATH);
+            if (n > 0 && n < MAX_PATH) {
+                pluginPath = modPath;
+                if (_logger) _logger->info("kOfxPluginPropFilePath empty, using module path: {}", pluginPath);
+            }
+        }
+        if (pluginPath.empty()) {
+            if (_logger) _logger->warn("GetModuleFileName failed, cannot locate bundle resources");
+            return "";
+        }
+    }
+
+    size_t bundlePos = pluginPath.find(".ofx.bundle");
+    if (bundlePos == std::string::npos) {
+        if (_logger) _logger->warn("Plugin path does not contain .ofx.bundle: {}", pluginPath);
+        return "";
+    }
+
+    // Forward slashes are accepted by Windows file APIs even when the rest of
+    // the path uses backslashes, so we can append the resource subpath as-is.
+    std::string bundlePath = pluginPath.substr(0, bundlePos + 11);
+    std::string resourcePath = bundlePath + "/Contents/Resources/" + resourceName;
 
     if (_logger) _logger->debug("Resolved bundle resource path: {}", resourcePath);
     return resourcePath;
 
 #else
-    // Windows or unsupported platform
+    // Unsupported platform
     if (_logger) _logger->warn("Bundle resource lookup not implemented for this platform");
     return "";
 #endif
@@ -2280,7 +2544,7 @@ std::string BasePlugin::resolveWorkflowPath(const std::string& workflowPath)
     if (_logger) _logger->info("Resolving workflow path: {}", workflowPath);
 
     // If path is absolute and exists, use it directly
-    if (!workflowPath.empty() && workflowPath[0] == '/') {
+    if (isAbsolutePath(workflowPath)) {
         std::ifstream test(workflowPath);
         if (test.good()) {
             test.close();
@@ -2383,7 +2647,7 @@ json BasePlugin::customizeWorkflow(const json& baseWorkflow, int frame, const st
 
     // Get parameters for replacements
     std::string mountPath, project, workflowName, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     project = getTrimmedStringParam(_projectName);
     workflowName = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -2541,10 +2805,10 @@ void BasePlugin::renderBlocking(const OFX::RenderArguments &args)
 
     // Pre-create output directory on CLIENT side (will sync to SERVER via network mount)
     std::string mountPath, workflowName, version, serverMount;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getLocalMountPath();
     workflowName = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
-    serverMount = getTrimmedStringParam(_winMountPath);
+    serverMount = getTrimmedStringParam(_serverMountPath);
 
     if (_logger) {
         _logger->info("========================================");
@@ -2694,6 +2958,23 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
     auto cacheCheckDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - cacheCheckStart);
 
+    // Cache OFF: discard any existing output so the SaveEXR node (which refuses
+    // to overwrite) can write a fresh frame, then fall through to re-render.
+    const bool useCache = !_enableCache || _enableCache->getValue();
+    if (fileExists && !useCache) {
+        if (_logger) {
+            _logger->info("Frame {}: Cache disabled — removing stale output and re-rendering: {}",
+                         frame, cachedPath);
+        }
+        std::error_code ec;
+        std::filesystem::remove(cachedPath, ec);
+        {
+            std::lock_guard<std::mutex> lock(_cacheMutex);
+            _cacheFileExists.erase(cachedPath);
+        }
+        fileExists = false;
+    }
+
     if (fileExists) {
         if (_logger) {
             _logger->info("Frame {}: Cache HIT (check took {} ms, cached_in_mem: {})",
@@ -2792,7 +3073,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
 
         // 2a. Active job guard — build the output prefix key for this configuration
         std::string mountPath, project, workflowName, version;
-        mountPath = getTrimmedStringParam(_macMountPath);
+        mountPath = getLocalMountPath();
         project = getTrimmedStringParam(_projectName);
         workflowName = getTrimmedStringParam(_workflowName);
         version = getTrimmedStringParam(_outputVersion);
@@ -2853,7 +3134,7 @@ void BasePlugin::renderAsync(const OFX::RenderArguments &args)
 
         // Get mount path info for directory creation
         std::string mountPath, workflowName, version;
-        mountPath = getTrimmedStringParam(_macMountPath);
+        mountPath = getLocalMountPath();
         workflowName = getTrimmedStringParam(_workflowName);
         version = getTrimmedStringParam(_outputVersion);
 
@@ -3865,103 +4146,6 @@ bool BasePlugin::shouldFlipYForOFX() const
 }
 
 // ============================================================================
-// Configuration Management
-// ============================================================================
-
-json BasePlugin::loadConfigDefaults()
-{
-    // Try to load config from bundle resources
-    // This is a static method, so we need to find the bundle path manually
-
-    json config;
-
-    // Try to get or create a logger for config loading
-    auto logger = spdlog::get("comfyui_plugin");
-    if (!logger) {
-        // No logger available yet (first load), create a basic one
-        try {
-            const char* home = getenv("HOME");
-            if (home) {
-                auto now = std::chrono::system_clock::now();
-                std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-                std::tm* now_tm = std::localtime(&now_c);
-                char dateStamp[16];
-                std::strftime(dateStamp, sizeof(dateStamp), "%Y%m%d", now_tm);
-                std::string logPath = std::string(home) + "/comfyui_plugin_" + std::string(dateStamp) + ".log";
-                logger = spdlog::basic_logger_mt("comfyui_plugin", logPath);
-            }
-        } catch (...) {
-            // Ignore logger creation errors
-        }
-    }
-
-    if (logger) {
-        logger->info("=== BasePlugin::loadConfigDefaults() called ===");
-    }
-
-    try {
-        // Get the plugin bundle path from environment or OFX standard locations
-        std::string bundlePath;
-
-        // On macOS, OFX plugins are in ~/Library/OFX/Plugins/ or /Library/OFX/Plugins/
-        // Check common locations
-        const char* home = getenv("HOME");
-        if (home) {
-            std::vector<std::string> searchPaths = {
-                std::string(home) + "/Library/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json",
-                std::string(home) + "/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json",
-                "/Library/OFX/Plugins/AnyComfy.ofx.bundle/Contents/Resources/config/defaults.json"
-            };
-
-            if (logger) {
-                logger->info("Searching for config file in {} locations:", searchPaths.size());
-            }
-
-            for (const auto& path : searchPaths) {
-                if (logger) {
-                    logger->info("  Checking: {}", path);
-                }
-
-                std::ifstream configFile(path);
-                if (configFile.is_open()) {
-                    configFile >> config;
-                    configFile.close();
-
-                    // Log successful load
-                    if (logger) {
-                        logger->info("✓ Successfully loaded config from: {}", path);
-                        logger->info("Config contents: {}", config.dump(2));
-                    }
-
-                    return config;
-                } else {
-                    if (logger) {
-                        logger->debug("  ✗ Not found");
-                    }
-                }
-            }
-        } else {
-            if (logger) {
-                logger->error("HOME environment variable not set!");
-            }
-        }
-
-        // If we get here, config file not found - return empty JSON
-        if (logger) {
-            logger->warn("Config file not found in any standard location, using hardcoded defaults");
-        }
-
-    } catch (const std::exception& e) {
-        if (logger) {
-            logger->error("Failed to load config defaults: {}", e.what());
-        }
-    }
-
-    // Return empty JSON if loading failed
-    return json();
-}
-
-// ============================================================================
 // Parameter Description
 // ============================================================================
 
@@ -4046,9 +4230,13 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
 
     OFX::StringParamDescriptor *workflowFile = desc.defineStringParam("workflowFilePath");
     workflowFile->setLabel("Workflow File");
-    workflowFile->setHint("Path to workflow JSON file. Use 'resources/workflows/filename.json' for bundled workflows, or absolute path for custom workflows. Leave empty to use hardcoded workflow.");
+    workflowFile->setHint("Path to workflow JSON file. Use 'resources/workflow/<name>.json' for the bundled workflow, or an absolute path for a custom workflow. Leave empty to use the plugin's built-in hardcoded workflow.");
     workflowFile->setStringType(OFX::eStringTypeFilePath);
-    std::string workflowFileDefault = "resources/workflows/sam_segmentation.json";
+    // Neutral fallback: the per-plugin defaults-project.json supplies the correct
+    // bundled workflow path via config. If config can't be found, default to empty
+    // (use the built-in hardcoded workflow) rather than a bogus path that would
+    // log "could not resolve workflow path" every job.
+    std::string workflowFileDefault = "";
     if (configDefaults && configDefaults->contains("project") && (*configDefaults)["project"].contains("workflowFile")) {
         workflowFileDefault = (*configDefaults)["project"]["workflowFile"].get<std::string>();
     }
@@ -4245,30 +4433,65 @@ void BasePlugin::describeCommonParameters(OFX::ImageEffectDescriptor &desc,
     serverPort->setParent(*serverGroup);
     page->addChild(*serverPort);
 
-    OFX::StringParamDescriptor *macMount = desc.defineStringParam("macMountPath");
-    macMount->setLabel("macOS Mount Path");
-    macMount->setHint("macOS client mount path (e.g., /Volumes/silo2/002_COMFYUI)");
-    macMount->setStringType(OFX::eStringTypeDirectoryPath);
-    // Use config default if available, otherwise fallback to hardcoded default
-    std::string macMountPathDefault = "/Volumes/silo2/002_COMFYUI";
-    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("macMountPath")) {
-        macMountPathDefault = (*configDefaults)["server"]["macMountPath"].get<std::string>();
-    }
-    macMount->setDefault(macMountPathDefault.c_str());
-    macMount->setParent(*serverGroup);
-    page->addChild(*macMount);
+    // ==== STORAGE MOUNTS GROUP ====
+    // The shared-storage mount paths live in their own group, separate from the
+    // ComfyUI server connection above — they describe where the shared storage
+    // is mounted on each OS, not the ComfyUI endpoint.
+    OFX::GroupParamDescriptor *mountGroup = desc.defineGroupParam("mountGroup");
+    mountGroup->setLabel("Storage Mounts");
+    mountGroup->setOpen(false);  // Collapsed by default
+    if (!skipGroupHeaders) page->addChild(*mountGroup);
 
-    OFX::StringParamDescriptor *winMount = desc.defineStringParam("winMountPath");
-    winMount->setLabel("Windows Mount Path");
-    winMount->setHint("Windows server mount path (UNC: \\\\server\\share)");
-    // Use config default if available, otherwise fallback to hardcoded default
-    std::string winMountPathDefault = "\\\\192.168.1.110\\silo2\\002_COMFYUI";
-    if (configDefaults && configDefaults->contains("server") && (*configDefaults)["server"].contains("winMountPath")) {
-        winMountPathDefault = (*configDefaults)["server"]["winMountPath"].get<std::string>();
+    // ---- Shared-storage mounts (two views of the same storage) ------------
+    // The plugin and the ComfyUI server are different machines that both touch
+    // the EXRs on the same shared storage, mounted at different paths. The
+    // "local" mount is this host's view (local EXR I/O); the "server" mount is
+    // the ComfyUI box's view (written into the workflow sent to ComfyUI).
+    //
+    // The local default is the current OS's native view of the share. config's
+    // "storage" block may carry per-OS defaults (localMountPath.{macos,windows,
+    // linux}); we pick the entry for the platform this bundle was built for.
+#if defined(_WIN32)
+    const char* kLocalOsKey = "windows";
+    std::string localMountDefault = "\\\\HOSTNAME\\share";
+#elif defined(__APPLE__)
+    const char* kLocalOsKey = "macos";
+    std::string localMountDefault = "/Volumes/comfyui-share";
+#else
+    const char* kLocalOsKey = "linux";
+    std::string localMountDefault = "/mnt/comfyui-share";
+#endif
+    std::string serverMountDefault = "\\\\HOSTNAME\\share";
+    if (configDefaults && configDefaults->contains("storage")) {
+        const json& storage = (*configDefaults)["storage"];
+        if (storage.contains("localMountPath") && storage["localMountPath"].is_object() &&
+            storage["localMountPath"].contains(kLocalOsKey)) {
+            localMountDefault = storage["localMountPath"][kLocalOsKey].get<std::string>();
+        }
+        if (storage.contains("serverMountPath")) {
+            serverMountDefault = storage["serverMountPath"].get<std::string>();
+        }
     }
-    winMount->setDefault(winMountPathDefault.c_str());
-    winMount->setParent(*serverGroup);
-    page->addChild(*winMount);
+
+    OFX::StringParamDescriptor *localMount = desc.defineStringParam("localMountPath");
+    localMount->setLabel("Local Storage Mount");
+    localMount->setHint("The shared storage as mounted on THIS host — where the plugin reads and writes EXRs "
+                        "locally (e.g., /Volumes/comfyui-share on macOS, /mnt/comfyui-share on Linux, "
+                        "\\\\server\\share on Windows). Leave blank if this host reaches the storage at the same "
+                        "path as the ComfyUI server.");
+    localMount->setStringType(OFX::eStringTypeDirectoryPath);
+    localMount->setDefault(localMountDefault.c_str());
+    localMount->setParent(*mountGroup);
+    page->addChild(*localMount);
+
+    OFX::StringParamDescriptor *serverMount = desc.defineStringParam("serverMountPath");
+    serverMount->setLabel("ComfyUI Server Mount");
+    serverMount->setHint("The same shared storage as mounted on the ComfyUI server (UNC: \\\\server\\share). "
+                         "This is the path written into the workflow sent to ComfyUI — the server reads inputs "
+                         "and writes outputs through it.");
+    serverMount->setDefault(serverMountDefault.c_str());
+    serverMount->setParent(*mountGroup);
+    page->addChild(*serverMount);
 }
 
 } // namespace ComfyUI

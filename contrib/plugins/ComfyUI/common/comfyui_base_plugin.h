@@ -16,10 +16,132 @@
 #include <map>
 #include <unordered_set>
 #include <unordered_map>
+#include <cstdlib>
+#include <cctype>
+#include <string>
+#include <vector>
 
 using json = nlohmann::json;
 
 namespace ComfyUI {
+
+/**
+ * @brief Resolve the user's home directory in a cross-platform way.
+ *
+ * POSIX sets HOME, but Windows usually does not — there the home directory is
+ * exposed via USERPROFILE (or HOMEDRIVE + HOMEPATH). Relying on getenv("HOME")
+ * alone silently disables logging and config discovery on Windows, so every
+ * caller must go through this helper instead.
+ *
+ * @return The home directory path, or an empty string if none could be found.
+ */
+inline std::string getHomeDir()
+{
+    if (const char* home = std::getenv("HOME")) {
+        return home;
+    }
+#ifdef _WIN32
+    if (const char* userProfile = std::getenv("USERPROFILE")) {
+        return userProfile;
+    }
+    const char* drive = std::getenv("HOMEDRIVE");
+    const char* path = std::getenv("HOMEPATH");
+    if (drive && path) {
+        return std::string(drive) + path;
+    }
+#endif
+    return std::string();
+}
+
+/**
+ * @brief Cross-platform test for whether a path is absolute.
+ *
+ * POSIX absolute paths start with '/'. Windows additionally has drive-letter
+ * paths ("C:\\..." or "C:/...") and UNC paths ("\\\\server\\share"); a leading
+ * backslash also denotes a (drive-relative) root on Windows.
+ */
+inline bool isAbsolutePath(const std::string& path)
+{
+    if (path.empty()) {
+        return false;
+    }
+    if (path[0] == '/' || path[0] == '\\') {
+        return true;
+    }
+#ifdef _WIN32
+    // Drive-letter path, e.g. "C:\\foo" or "C:/foo".
+    if (path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) &&
+        path[1] == ':' && (path[2] == '/' || path[2] == '\\')) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+/**
+ * @brief Build the ordered list of candidate defaults.json paths for the given
+ *        OFX bundles, across platforms.
+ *
+ * Searches, most specific first: every root listed in OFX_PLUGIN_PATH (the
+ * canonical OFX host search path, so config is found wherever the host actually
+ * loaded the bundle from), then the user's per-user OFX directories, then the
+ * system-wide install locations for macOS (/Library/OFX/Plugins) and Windows
+ * (C:\Program Files\Common Files\OFX\Plugins, plus %CommonProgramFiles%).
+ *
+ * @param bundleNames Bundle base names without the ".ofx.bundle" suffix, in
+ *                    priority order (e.g. {"DepthAnything3"}).
+ */
+inline std::vector<std::string> getOfxConfigSearchPaths(const std::vector<std::string>& bundleNames)
+{
+    const std::string suffix = ".ofx.bundle/Contents/Resources/config/defaults.json";
+    const std::string home = getHomeDir();
+
+#ifdef _WIN32
+    const char pathSep = ';';
+#else
+    const char pathSep = ':';
+#endif
+
+    // Roots that directly contain bundle directories (i.e. an ".../OFX/Plugins").
+    std::vector<std::string> ofxRoots;
+    if (const char* pluginPath = std::getenv("OFX_PLUGIN_PATH")) {
+        const std::string value(pluginPath);
+        size_t start = 0;
+        while (start < value.size()) {
+            size_t end = value.find(pathSep, start);
+            if (end == std::string::npos) end = value.size();
+            if (end > start) ofxRoots.push_back(value.substr(start, end - start));
+            start = end + 1;
+        }
+    }
+
+    std::vector<std::string> paths;
+    for (const auto& bundle : bundleNames) {
+        for (const auto& root : ofxRoots) {
+            paths.push_back(root + "/" + bundle + suffix);
+        }
+        // Per-user OFX directories.
+        if (!home.empty()) {
+            paths.push_back(home + "/Library/OFX/Plugins/" + bundle + suffix);   // macOS user
+            paths.push_back(home + "/OFX/Plugins/" + bundle + suffix);           // generic (Linux) user
+        }
+
+        // Standard system OFX plugin directories for every platform, per the OFX
+        // spec. All are probed on every OS — a path that doesn't exist just fails
+        // to open and is skipped — so config is found wherever the host loaded the
+        // bundle from, whether that's macOS, Windows, or Linux (e.g. Flame loads
+        // from /usr/OFX/Plugins, which earlier builds omitted and so never found
+        // their defaults.json on Linux).
+        paths.push_back("/Library/OFX/Plugins/" + bundle + suffix);                       // macOS
+        paths.push_back("/usr/OFX/Plugins/" + bundle + suffix);                           // Linux
+        paths.push_back("/usr/local/OFX/Plugins/" + bundle + suffix);                     // Linux (local install)
+        paths.push_back("C:/Program Files/Common Files/OFX/Plugins/" + bundle + suffix);  // Windows
+        if (const char* commonProgramFiles = std::getenv("CommonProgramFiles")) {         // Windows (relocated Common Files)
+            paths.push_back(std::string(commonProgramFiles) + "/OFX/Plugins/" + bundle + suffix);
+        }
+    }
+    return paths;
+}
 
 /**
  * @brief Base class for all ComfyUI OFX plugins
@@ -39,36 +161,51 @@ namespace ComfyUI {
 class BasePlugin : public OFX::ImageEffect {
 protected:
     // Clips - Primary input and output
-    OFX::Clip *_srcClip;      // Primary input (Source) - required
-    OFX::Clip *_dstClip;      // Output
+    //
+    // NOTE: every clip/param pointer below carries an in-class `= nullptr`
+    // initializer. This is load-bearing, not stylistic: the constructor's
+    // env-discovery dump calls shouldFlipYForOFX() — which reads _flipYMode —
+    // BEFORE the parameter-fetch block assigns these members. Any pointer left
+    // indeterminate there is read as garbage; `if (_flipYMode)` then passes and
+    // the following ->getValue() dereferences a wild pointer (SIGSEGV that no
+    // try/catch can intercept). macOS hosts happened to get zeroed memory and
+    // survived; Flame on Linux got non-zero garbage and crashed on instancing.
+    // Keep these initializers even though the constructor init-list also sets
+    // most of them — they guarantee safety for any read-before-fetch path.
+    OFX::Clip *_srcClip = nullptr;      // Primary input (Source) - required
+    OFX::Clip *_dstClip = nullptr;      // Output
 
     // Optional secondary input clips for multi-input workflows
-    OFX::Clip *_src2Clip;     // Secondary input (Source2) - optional
-    OFX::Clip *_src3Clip;     // Tertiary input (Source3) - optional
+    OFX::Clip *_src2Clip = nullptr;     // Secondary input (Source2) - optional
+    OFX::Clip *_src3Clip = nullptr;     // Tertiary input (Source3) - optional
 
     // Common parameters
-    OFX::BooleanParam *_enableProcessing;      // Master enable/disable for ComfyUI processing
-    OFX::StringParam *_serverAddress;
-    OFX::IntParam *_serverPort;
-    OFX::StringParam *_macMountPath;           // macOS client mount path
-    OFX::StringParam *_winMountPath;           // Windows server mount path (UNC, e.g., "\\\\192.168.1.110\\share")
-    OFX::StringParam *_projectName;            // Project name for file organization (e.g., "my_commercial")
-    OFX::StringParam *_workflowName;           // Workflow subdirectory (e.g., "segmentation")
-    OFX::StringParam *_outputVersion;          // Output version (e.g., "v001")
-    OFX::StringParam *_workflowFilePath;       // Path to workflow JSON file (supports bundle resources)
-    OFX::BooleanParam *_enableCache;
-    OFX::IntParam *_timeout;
+    OFX::BooleanParam *_enableProcessing = nullptr;  // Master enable/disable for ComfyUI processing
+    OFX::StringParam *_serverAddress = nullptr;
+    OFX::IntParam *_serverPort = nullptr;
+    // The shared storage, addressed two ways: as this host sees it (local EXR
+    // I/O) and as the ComfyUI server sees it (written into the workflow). They
+    // differ because the host running the plugin and the ComfyUI box are
+    // different machines mounting the same share at different paths.
+    OFX::StringParam *_localMountPath = nullptr;      // This host's mount  (e.g. /Volumes/comfyui-share or /mnt/comfyui-share)
+    OFX::StringParam *_serverMountPath = nullptr;     // ComfyUI server's mount (UNC, e.g. \\HOSTNAME\share)
+    OFX::StringParam *_projectName = nullptr;         // Project name for file organization (e.g., "my_commercial")
+    OFX::StringParam *_workflowName = nullptr;        // Workflow subdirectory (e.g., "segmentation")
+    OFX::StringParam *_outputVersion = nullptr;       // Output version (e.g., "v001")
+    OFX::StringParam *_workflowFilePath = nullptr;    // Path to workflow JSON file (supports bundle resources)
+    OFX::BooleanParam *_enableCache = nullptr;
+    OFX::IntParam *_timeout = nullptr;
 
     // Async rendering parameters
-    OFX::ChoiceParam *_asyncMode;              // Blocking vs Non-blocking rendering
-    OFX::ChoiceParam *_placeholderMode;        // What to show while processing
-    OFX::DoubleParam *_refreshTrigger;         // Hidden parameter for cache invalidation
-    OFX::StringParam *_jobStatus;              // Read-only job status display
-    OFX::RGBParam *_jobStatusColor;            // Visual status indicator (color swatch)
-    OFX::ChoiceParam *_flipYMode;              // EXR Y-flip override: 0=Auto, 1=Always, 2=Never
+    OFX::ChoiceParam *_asyncMode = nullptr;          // Blocking vs Non-blocking rendering
+    OFX::ChoiceParam *_placeholderMode = nullptr;    // What to show while processing
+    OFX::DoubleParam *_refreshTrigger = nullptr;     // Hidden parameter for cache invalidation
+    OFX::StringParam *_jobStatus = nullptr;          // Read-only job status display
+    OFX::RGBParam *_jobStatusColor = nullptr;        // Visual status indicator (color swatch)
+    OFX::ChoiceParam *_flipYMode = nullptr;          // EXR Y-flip override: 0=Auto, 1=Always, 2=Never
 
     // Sequence plugins only: button to collect all frames and submit the job
-    OFX::PushButtonParam *_collectAndSubmit;   // nullptr for non-sequence plugins
+    OFX::PushButtonParam *_collectAndSubmit = nullptr;  // nullptr for non-sequence plugins
 
     // Instance identification
     std::string _instanceName;                 // OFX instance name for auto-basename generation
@@ -209,6 +346,11 @@ protected:
     // rejects it and ComfyUI fails with "Path not found".
     std::string getTrimmedStringParam(OFX::StringParam* param) const;
 
+    // Return this host's mount of the shared storage — the "client" mount used
+    // for all local EXR read/write. Falls back to the ComfyUI server mount when
+    // unset (single-box setup, or this host reaches the share at the same path).
+    std::string getLocalMountPath() const;
+
     // Multi-input support
     // Writes all connected input clips to EXR files, returns map of input ID -> path
     // InputA = Source (primary), InputB = Source2, InputC = Source3
@@ -224,7 +366,7 @@ protected:
     json customizeWorkflow(const json& baseWorkflow, int frame, const std::map<std::string, std::string>& inputPaths);
 
     // Sequence input helpers
-    // Returns folder path: {macMountPath}/in/projects/{project}/{workflow}/{version}/{basename}/
+    // Returns folder path: {mount}/in/projects/{project}/{workflow}/{version}/{basename}/
     std::string constructInputFolderPath() const;
     // Writes frames [startFrame..endFrame] from _srcClip to the input folder, one frame at a
     // time on the calling (render) thread — satisfying the OFX main-thread constraint.
@@ -266,9 +408,6 @@ public:
                                          const json* configDefaults = nullptr,
                                          bool skipGroupHeaders = false,
                                          bool isSequencePlugin = false);
-
-    // Configuration file management (public for factory access)
-    static json loadConfigDefaults();
 };
 
 } // namespace ComfyUI

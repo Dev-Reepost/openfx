@@ -65,8 +65,8 @@ function(aifx_merge_defaults TARGET BUNDLE_RESOURCES_DIR)
     add_custom_command(TARGET ${TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUNDLE_RESOURCES_DIR}/config"
         COMMAND ${Python3_EXECUTABLE}
-            "${CMAKE_SOURCE_DIR}/tools/merge-defaults.py"
-            "${CMAKE_SOURCE_DIR}/config/defaults-base.json"
+            "${CMAKE_SOURCE_DIR}/contrib/dev-tools/merge-defaults.py"
+            "${CMAKE_SOURCE_DIR}/contrib/config/defaults-base.json"
             "${CMAKE_CURRENT_SOURCE_DIR}/defaults-project.json"
             "${BUNDLE_RESOURCES_DIR}/config/defaults.json"
         COMMENT "Merging defaults.json into ${TARGET} bundle"

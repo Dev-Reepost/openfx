@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -71,6 +72,13 @@ struct AsyncJob {
     std::string errorMessage;                               // Error message if failed
     int pollCount;                                          // Number of times we've polled for this job
     SubmissionStatus submissionStatus;                      // Track async submission progress
+
+    // When ComfyUI first reported the job complete but the output file was not
+    // yet visible on this host's mount. Default-constructed (epoch) means "not
+    // seen yet". Used to grant a bounded grace period for the output to appear,
+    // since on networked storage (NFS/SMB) the file written by the ComfyUI
+    // server lags its completion report on the client's view of the share.
+    std::chrono::steady_clock::time_point completedFileWaitStart{};
 
     AsyncJob()
         : frame(-1)
@@ -443,6 +451,29 @@ private:
      */
     bool verifyOutputFile(const std::string& path) const;
 
+    /**
+     * @brief Decide whether to keep waiting for a completed job's output file.
+     *
+     * ComfyUI runs on the storage server and writes the EXR there; this host
+     * sees the same share over the network, where the new file can lag the
+     * server's completion report by a short interval. When a job is reported
+     * complete but its output is not yet visible, we wait a bounded grace
+     * period (re-checking each poll) before declaring failure, instead of
+     * failing on the first miss.
+     *
+     * @param job The job whose output is missing (its wait-start is stamped on
+     *            first call). Mutated to record when the wait began.
+     * @return true if still within the grace window (caller should keep
+     *         polling); false if the grace has expired (caller should fail).
+     */
+    bool shouldKeepWaitingForOutput(AsyncJob& job) const;
+
+    // Grace window for a completed job's output file to become visible on a
+    // networked mount before the job is declared failed. Sized to cover typical
+    // SMB/NFS negative-lookup cache TTLs, since the file is written by the
+    // ComfyUI server and read back over the share by this host.
+    static constexpr double kOutputFileGraceSeconds = 30.0;
+
     // ========================================================================
     // Member Variables
     // ========================================================================
@@ -462,6 +493,15 @@ private:
     // Background sequence write thread (tracked so destructor can join it)
     std::thread _writeThread;                      // Background fetch+write+submit thread
     std::mutex _writeThreadMutex;                  // Protects _writeThread join/replace
+
+    // Per-frame submitJobAsync() launches detached worker threads. They are not
+    // joinable, so the destructor cannot wait on them directly. Track the number
+    // in flight and block in ~AsyncJobManager until it drains, so a detached
+    // worker can never call back into a destroyed manager / client / plugin
+    // (use-after-free on plugin teardown mid-submission).
+    std::atomic<int> _activeAsyncSubmits{0};
+    std::mutex _asyncSubmitMutex;
+    std::condition_variable _asyncSubmitCv;
 
     // Completion callback
     std::mutex _callbackMutex;                     // Protects callback
