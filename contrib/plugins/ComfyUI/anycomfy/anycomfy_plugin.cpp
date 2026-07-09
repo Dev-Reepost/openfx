@@ -300,7 +300,7 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::map<std::string, std::s
     // This ensures the plugin works with BOTH templated and raw ComfyUI workflows
     // CRITICAL: This must happen AFTER UI→API conversion because it expects API format
     std::string mountPath, project, workflowName, version;
-    mountPath = getTrimmedStringParam(_macMountPath);
+    mountPath = getTrimmedStringParam(_localMountPath);
     project = getTrimmedStringParam(_projectName);
     workflowName = getTrimmedStringParam(_workflowName);
     version = getTrimmedStringParam(_outputVersion);
@@ -337,7 +337,7 @@ std::string AnyComfyPlugin::getWorkflowsPath() const
     if (comfyInputDir.empty()) {
         // Fallback to shared mount path if input dir not configured
         std::string sharedMount;
-        sharedMount = getTrimmedStringParam(_macMountPath);
+        sharedMount = getTrimmedStringParam(_localMountPath);
         return (fs::path(sharedMount) / "workflows").string();
     }
 
@@ -870,8 +870,8 @@ json AnyComfyPlugin::injectPathsIntoWorkflow(const json& workflow, int frame,
 
     // Get mount path info for path conversion
     std::string clientMount, serverMount;
-    clientMount = getTrimmedStringParam(_macMountPath);
-    serverMount = getTrimmedStringParam(_winMountPath);
+    clientMount = getTrimmedStringParam(_localMountPath);
+    serverMount = getTrimmedStringParam(_serverMountPath);
 
     // Helper lambda to convert paths to ComfyUI format (Windows paths)
     auto convertPath = [&](const std::string& path) -> std::string {
@@ -1554,7 +1554,11 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     if (auto logger = spdlog::get("AnyComfy")) {
         logger->info("Loading config defaults from bundle...");
     }
-    json configDefaults = BasePlugin::loadConfigDefaults();
+    json configDefaults;
+    for (const auto& path : getOfxConfigSearchPaths({"AnyComfy"})) {
+        std::ifstream f(path);
+        if (f.is_open()) { f >> configDefaults; break; }
+    }
 
     if (auto logger = spdlog::get("AnyComfy")) {
         if (!configDefaults.empty()) {
@@ -1683,32 +1687,24 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
     // (overrides base-class workflowFilePath)
     // ========================================================================
     {
-        // Build default workflow path: <comfyUIInputDir>/workflows/
+        // Build the default workflow path: <localMount>/in/workflows/, derived
+        // from the storage schema (storage.localMountPath.<os>).
         #ifdef __APPLE__
+            const char* osKey = "macos";
             std::string workflowBaseDir = "/Volumes/silo2/002_COMFYUI/in";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("macComfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["macComfyUIInputDir"].get<std::string>();
-            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
-            }
-            std::string workflowDefault = workflowBaseDir + "/workflows";
         #elif defined(_WIN32) || defined(_WIN64)
-            std::string workflowBaseDir = "C:\\ComfyUI\\input";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("winComfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["winComfyUIInputDir"].get<std::string>();
-            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
-            }
-            std::string workflowDefault = workflowBaseDir + "\\workflows";
+            const char* osKey = "windows";
+            std::string workflowBaseDir = "\\\\server\\share\\002_COMFYUI\\in";
         #else
-            std::string workflowBaseDir = "/mnt/comfyui/input";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("linuxComfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["linuxComfyUIInputDir"].get<std::string>();
-            } else if (configDefaults.contains("server") && configDefaults["server"].contains("comfyUIInputDir")) {
-                workflowBaseDir = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
-            }
-            std::string workflowDefault = workflowBaseDir + "/workflows";
+            const char* osKey = "linux";
+            std::string workflowBaseDir = "/mnt/comfyui/in";
         #endif
+        if (configDefaults.contains("storage") &&
+            configDefaults["storage"].contains("localMountPath") &&
+            configDefaults["storage"]["localMountPath"].contains(osKey)) {
+            workflowBaseDir = configDefaults["storage"]["localMountPath"][osKey].get<std::string>() + "/in";
+        }
+        std::string workflowDefault = workflowBaseDir + "/workflows";
 
         OFX::StringParamDescriptor *param = desc.defineStringParam("workflowFilePath");
         param->setLabel("Select Workflow");
@@ -1836,87 +1832,33 @@ void AnyComfyPluginFactory::describeInContext(OFX::ImageEffectDescriptor &desc,
         param->setHint("Auto-derived from workflow file path and used for output path construction (hidden in AnyComfy UI)");
     }
 
-    // ========================================================================
-    // I/O group – OS-specific mount path (compile-time platform detection)
-    // Shows only the relevant path for the OS this plugin is compiled for
-    // ========================================================================
+    // The local mount ("Local Mount Path" / localMountPath) and the ComfyUI
+    // server mount (serverMountPath) are defined by BasePlugin::describeCommonParameters
+    // above (new storage schema). AnyComfy only adds its ComfyUI Input Directory
+    // below, defaulting to <localMount>/in.
+
+    // ComfyUI Input Directory (I/O group). Defaults to the per-OS local mount
+    // from the storage schema, plus "/in".
     {
         #ifdef __APPLE__
-            // macOS build
-            OFX::StringParamDescriptor *param = desc.defineStringParam("macMountPath");
-            param->setLabel("Local Mount Path");
-            param->setHint(
-                "Local mount path for the ComfyUI shared directory.\n\n"
-                "macOS example: /Volumes/silo2/002_COMFYUI\n\n"
-                "This path is used by the plugin to access ComfyUI files\n"
-                "on the local filesystem."
-            );
-            std::string defaultPath = "/Volumes/silo2/002_COMFYUI";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("macMountPath")) {
-                defaultPath = configDefaults["server"]["macMountPath"].get<std::string>();
-            }
-        #elif defined(_WIN32) || defined(_WIN64)
-            // Windows build
-            OFX::StringParamDescriptor *param = desc.defineStringParam("winMountPath");
-            param->setLabel("Local Mount Path");
-            param->setHint(
-                "Local mount path for the ComfyUI shared directory.\n\n"
-                "Windows examples:\n"
-                "  Local: C:\\ComfyUI\n"
-                "  Network: \\\\server\\share\\002_COMFYUI\n\n"
-                "This path is used by the plugin to access ComfyUI files\n"
-                "on the local filesystem."
-            );
-            std::string defaultPath = "C:\\ComfyUI";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("winMountPath")) {
-                defaultPath = configDefaults["server"]["winMountPath"].get<std::string>();
-            }
-        #else
-            // Linux build
-            OFX::StringParamDescriptor *param = desc.defineStringParam("linuxMountPath");
-            param->setLabel("Local Mount Path");
-            param->setHint(
-                "Local mount path for the ComfyUI shared directory.\n\n"
-                "Linux example: /mnt/silo2/002_COMFYUI\n\n"
-                "This path is used by the plugin to access ComfyUI files\n"
-                "on the local filesystem."
-            );
-            std::string defaultPath = "/mnt/comfyui";
-            if (configDefaults.contains("server") && configDefaults["server"].contains("linuxMountPath")) {
-                defaultPath = configDefaults["server"]["linuxMountPath"].get<std::string>();
-            }
-        #endif
-
-        param->setStringType(OFX::eStringTypeDirectoryPath);
-        param->setDefault(defaultPath.c_str());
-        param->setAnimates(false);
-        param->setParent(*ioGroup);
-        page->addChild(*param);
-    }
-
-    // ComfyUI Input Directory – OS-specific (I/O group)
-    {
-        #ifdef __APPLE__
+            const char* osKey = "macos";
             std::string inputDirDefault = "/Volumes/silo2/002_COMFYUI/in";
-            std::string configKey = "macComfyUIInputDir";
             std::string examplePath = "/Volumes/silo2/002_COMFYUI/in";
         #elif defined(_WIN32) || defined(_WIN64)
-            std::string inputDirDefault = "C:\\ComfyUI\\input";
-            std::string configKey = "winComfyUIInputDir";
-            std::string examplePath = "C:\\ComfyUI\\input or \\\\server\\share\\002_COMFYUI\\in";
+            const char* osKey = "windows";
+            std::string inputDirDefault = "\\\\server\\share\\002_COMFYUI\\in";
+            std::string examplePath = "\\\\server\\share\\002_COMFYUI\\in";
         #else
-            std::string inputDirDefault = "/mnt/comfyui/input";
-            std::string configKey = "linuxComfyUIInputDir";
+            const char* osKey = "linux";
+            std::string inputDirDefault = "/mnt/comfyui/in";
             std::string examplePath = "/mnt/silo2/002_COMFYUI/in";
         #endif
 
-        // Try OS-specific config key first, fall back to generic
-        if (configDefaults.contains("server")) {
-            if (configDefaults["server"].contains(configKey)) {
-                inputDirDefault = configDefaults["server"][configKey].get<std::string>();
-            } else if (configDefaults["server"].contains("comfyUIInputDir")) {
-                inputDirDefault = configDefaults["server"]["comfyUIInputDir"].get<std::string>();
-            }
+        // Derive from storage.localMountPath.<os> + "/in" (new schema).
+        if (configDefaults.contains("storage") &&
+            configDefaults["storage"].contains("localMountPath") &&
+            configDefaults["storage"]["localMountPath"].contains(osKey)) {
+            inputDirDefault = configDefaults["storage"]["localMountPath"][osKey].get<std::string>() + "/in";
         }
 
         OFX::StringParamDescriptor *param = desc.defineStringParam("comfyUIInputDir");
