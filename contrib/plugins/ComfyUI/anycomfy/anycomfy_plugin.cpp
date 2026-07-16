@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <regex>
 
 #ifdef __APPLE__
 // ofx_open_url() is implemented in open_url.mm (NSWorkspace wrapper).
@@ -28,6 +29,79 @@ extern "C" int ofx_open_url(const char* url_cstr);
 namespace fs = std::filesystem;
 
 namespace ComfyUI {
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Workflow-file helpers.
+//
+// ComfyUI / the OFX autosaver writes the executable prompt next to the UI
+// workflow as "<name>_api.json". Historically the plugin matched that suffix
+// (and built the sibling path) with a hard-coded lowercase "_api". On a
+// case-insensitive filesystem (macOS/Windows) a file saved as "<name>_API.json"
+// still resolved; on Linux (case-sensitive) it did not, so the plugin silently
+// fell back to converting the UI JSON itself — a conversion that does NOT
+// expand subgraphs and therefore emits nodes whose class_type is the raw
+// subgraph UUID. ComfyUI then rejects the whole prompt with a 400
+// "missing_node_type". These helpers make the lookup case-insensitive so the
+// already-flattened API file is always used when present.
+// ---------------------------------------------------------------------------
+
+std::string toLower(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+// True if the filename ends in "_api.json" regardless of case.
+bool hasApiSuffix(const std::string& filename)
+{
+    return toLower(filename).find("_api.json") != std::string::npos;
+}
+
+// Given a UI workflow path "<dir>/<stem>.json", look in <dir> for a sibling
+// file named "<stem>_api.json" in any casing. Returns the real on-disk path if
+// found, or an empty path otherwise.
+fs::path findApiSibling(const fs::path& uiPath)
+{
+    fs::path dir = uiPath.parent_path();
+    if (dir.empty() || !fs::exists(dir) || !fs::is_directory(dir)) return {};
+
+    const std::string wantName = toLower(uiPath.stem().string() + "_api.json");
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        if (toLower(entry.path().filename().string()) == wantName) {
+            return entry.path();
+        }
+    }
+    return {};
+}
+
+// Scans an API-format workflow for a node whose class_type is a bare UUID —
+// the signature of a ComfyUI subgraph instance that was never expanded into its
+// underlying nodes. Returns "<node_id> (<uuid>)" for the first such node, or an
+// empty string if the workflow is clean.
+std::string firstUnexpandedSubgraph(const json& apiWorkflow)
+{
+    static const std::regex kUuid(
+        "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    if (!apiWorkflow.is_object()) return {};
+    for (auto it = apiWorkflow.begin(); it != apiWorkflow.end(); ++it) {
+        const json& node = it.value();
+        if (!node.is_object() || !node.contains("class_type")) continue;
+        const json& ct = node["class_type"];
+        if (!ct.is_string()) continue;
+        if (std::regex_match(ct.get<std::string>(), kUuid)) {
+            return it.key() + " (" + ct.get<std::string>() + ")";
+        }
+    }
+    return {};
+}
+
+} // namespace
 
 // ============================================================================
 // AnyComfyPlugin Implementation
@@ -172,21 +246,21 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::map<std::string, std::s
         throw std::runtime_error("Workflow file not found: " + resolvedPath.string());
     }
 
-    // Detect if it's API format by checking filename
+    // Detect if it's API format by checking filename.
+    // Case-insensitive: ComfyUI's "Save (API Format)" may write "<name>_API.json",
+    // which resolves on macOS/Windows but not on a case-sensitive Linux FS.
     std::string filename = resolvedPath.filename().string();
-    usingApiFormat = (filename.find("_api.json") != std::string::npos);
+    usingApiFormat = hasApiSuffix(filename);
 
     if (!usingApiFormat) {
-        // User selected UI format file - try to find API version
-        std::string apiPath = resolvedPath.string();
-        size_t dotPos = apiPath.rfind(".json");
-        if (dotPos != std::string::npos) {
-            apiPath.insert(dotPos, "_api");
-            if (fs::exists(apiPath)) {
-                resolvedPath = apiPath;
-                usingApiFormat = true;
-                if (_logger) _logger->info("Found API format workflow: {}", resolvedPath.string());
-            }
+        // User selected the UI format file - look for a sibling API file
+        // ("<name>_api.json") in ANY casing before falling back to converting
+        // the UI JSON ourselves (our converter does not expand subgraphs).
+        fs::path apiSibling = findApiSibling(resolvedPath);
+        if (!apiSibling.empty()) {
+            resolvedPath = apiSibling;
+            usingApiFormat = true;
+            if (_logger) _logger->info("Found API format workflow: {}", resolvedPath.string());
         }
     }
 
@@ -294,6 +368,28 @@ json AnyComfyPlugin::buildWorkflow(int frame, const std::map<std::string, std::s
         customized = convertUIFormatToAPI(customized);
     } else if (usingApiFormat) {
         if (_logger) _logger->info("Using API format directly (no conversion needed)");
+    }
+
+    // Guard: a bare-UUID class_type is a ComfyUI subgraph instance that was never
+    // expanded into its underlying nodes. Submitting it makes ComfyUI reject the
+    // whole prompt with a cryptic 400 "missing_node_type". Fail here instead, with
+    // an actionable message. This normally means no flattened "<name>_api.json"
+    // was found and we converted the UI JSON ourselves (our converter does not
+    // expand subgraphs).
+    {
+        std::string offender = firstUnexpandedSubgraph(customized);
+        if (!offender.empty()) {
+            std::string msg =
+                "Workflow contains an un-expanded ComfyUI subgraph (node " + offender + ").\n"
+                "The plugin cannot flatten subgraphs. Fix by either:\n"
+                "  1. Saving a flattened API workflow next to it as \"<name>_api.json\" "
+                "(ComfyUI: Save/Export in API format), or\n"
+                "  2. In the ComfyUI editor, right-click each subgraph -> \"Convert to nodes\", "
+                "then re-save.\n"
+                "Then reload the workflow.";
+            if (_logger) _logger->error("{}", msg);
+            throw std::runtime_error(msg);
+        }
     }
 
     // Then, inject paths directly into LoadEXR/SaveEXR nodes
@@ -688,16 +784,14 @@ void AnyComfyPlugin::openExistingWorkflow()
         throw std::runtime_error("Workflow file not found: " + apiWorkflowPath.string());
     }
 
-    // Derive UI path from API path
-    // e.g., workflows/my_workflow/my_workflow_api.json -> workflows/my_workflow/my_workflow.json
+    // Derive UI path from API path (case-insensitive: the file may be saved as
+    // "<name>_API.json"). e.g. workflows/wf/wf_api.json -> workflows/wf/wf.json
     std::string uiPathStr = apiWorkflowPath.string();
-    size_t apiPos = uiPathStr.rfind("_api.json");
+    size_t apiPos = toLower(uiPathStr).rfind("_api.json");
     if (apiPos != std::string::npos) {
-        uiPathStr.replace(apiPos, 9, ".json");  // Replace "_api.json" with ".json"
-    } else {
-        // Not an API file, assume it's already UI format
-        uiPathStr = apiWorkflowPath.string();
+        uiPathStr.replace(apiPos, 9, ".json");  // Replace "_api.json"/"_API.json" with ".json"
     }
+    // else: not an API file, assume it is already UI format (uiPathStr unchanged)
     fs::path uiWorkflowPath = uiPathStr;
 
     // Path the OFX.AutoLoader will fetch, RELATIVE to the ComfyUI input dir,
